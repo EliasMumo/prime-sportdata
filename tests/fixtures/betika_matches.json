@@ -1,0 +1,238 @@
+{
+ "data": [
+  {
+   "home_team": "Al-Zlfe",
+   "game_id": "93483",
+   "match_id": "11588849",
+   "away_team": "Hajer FC",
+   "start_time": "2026-09-08 18:50:00",
+   "competition_name": "Division 1",
+   "category": "Saudi Arabia",
+   "parent_match_id": "73206448",
+   "side_bets": "31",
+   "home_odd": "1.65",
+   "neutral_odd": "3.45",
+   "away_odd": "5.20",
+   "competition_id": "1015",
+   "sport_id": "14",
+   "sport_name": "Soccer",
+   "is_esport": false,
+   "is_srl": false,
+   "provider": "sr",
+   "odds": [
+    {
+     "sub_type_id": "1",
+     "name": "1X2",
+     "odds": [
+      {
+       "display": "1",
+       "odd_key": "Al-Zlfe",
+       "odd_def": "{$competitor1}",
+       "odd_value": "1.65",
+       "special_bet_value": "",
+       "outcome_id": "1",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "X",
+       "odd_key": "draw",
+       "odd_def": "draw",
+       "odd_value": "3.45",
+       "special_bet_value": "",
+       "outcome_id": "2",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "2",
+       "odd_key": "Hajer FC",
+       "odd_def": "{$competitor2}",
+       "odd_value": "5.20",
+       "special_bet_value": "",
+       "outcome_id": "3",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "home_team": "Mrugala, Bartlomiej",
+   "game_id": "28526",
+   "match_id": "11592954",
+   "away_team": "Szlubowski, Dariusz",
+   "start_time": "2026-09-08 18:50:00",
+   "competition_name": "TT Elite Series",
+   "category": "International",
+   "parent_match_id": "74424870",
+   "side_bets": "7",
+   "home_odd": "2.31",
+   "neutral_odd": null,
+   "away_odd": "1.54",
+   "competition_id": "40741",
+   "sport_id": "45",
+   "sport_name": "Table Tennis",
+   "is_esport": false,
+   "is_srl": false,
+   "provider": "sr",
+   "odds": [
+    {
+     "sub_type_id": "186",
+     "name": "WINNER",
+     "odds": [
+      {
+       "display": "1",
+       "odd_key": "Mrugala, Bartlomiej",
+       "odd_def": "{$competitor1}",
+       "odd_value": "2.31",
+       "special_bet_value": "",
+       "outcome_id": "4",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "2",
+       "odd_key": "Szlubowski, Dariusz",
+       "odd_def": "{$competitor2}",
+       "odd_value": "1.54",
+       "special_bet_value": "",
+       "outcome_id": "5",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "home_team": "Al-Hazm",
+   "game_id": "60545",
+   "match_id": "11262047",
+   "away_team": "Al-Taawoun FC",
+   "start_time": "2026-09-08 18:55:00",
+   "competition_name": "Saudi Pro League",
+   "category": "Saudi Arabia",
+   "parent_match_id": "73159940",
+   "side_bets": "73",
+   "home_odd": "3.15",
+   "neutral_odd": "3.30",
+   "away_odd": "2.26",
+   "competition_id": "43366",
+   "sport_id": "14",
+   "sport_name": "Soccer",
+   "is_esport": false,
+   "is_srl": false,
+   "provider": "sr",
+   "odds": [
+    {
+     "sub_type_id": "1",
+     "name": "1X2",
+     "odds": [
+      {
+       "display": "1",
+       "odd_key": "Al-Hazm",
+       "odd_def": "{$competitor1}",
+       "odd_value": "3.15",
+       "special_bet_value": "",
+       "outcome_id": "1",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "X",
+       "odd_key": "draw",
+       "odd_def": "draw",
+       "odd_value": "3.30",
+       "special_bet_value": "",
+       "outcome_id": "2",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "2",
+       "odd_key": "Al-Taawoun FC",
+       "odd_def": "{$competitor2}",
+       "odd_value": "2.26",
+       "special_bet_value": "",
+       "outcome_id": "3",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "home_team": "Estrela Amadora",
+   "game_id": "42899",
+   "match_id": "11228781",
+   "away_team": "UD Leiria U23",
+   "start_time": "2026-09-08 19:00:00",
+   "competition_name": "U23 Liga Next Gen",
+   "category": "Portugal",
+   "parent_match_id": "72962242",
+   "side_bets": "5",
+   "home_odd": "2.34",
+   "neutral_odd": "3.10",
+   "away_odd": "2.80",
+   "competition_id": "54351",
+   "sport_id": "14",
+   "sport_name": "Soccer",
+   "is_esport": false,
+   "is_srl": false,
+   "provider": "sr",
+   "odds": [
+    {
+     "sub_type_id": "1",
+     "name": "1X2",
+     "odds": [
+      {
+       "display": "1",
+       "odd_key": "Estrela Amadora",
+       "odd_def": "{$competitor1}",
+       "odd_value": "2.34",
+       "special_bet_value": "",
+       "outcome_id": "1",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "X",
+       "odd_key": "draw",
+       "odd_def": "draw",
+       "odd_value": "3.10",
+       "special_bet_value": "",
+       "outcome_id": "2",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      },
+      {
+       "display": "2",
+       "odd_key": "UD Leiria U23",
+       "odd_def": "{$competitor2}",
+       "odd_value": "2.80",
+       "special_bet_value": "",
+       "outcome_id": "3",
+       "parsed_special_bet_value": {
+        "": ""
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "meta": {}
+}

@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prime-sportdata"
+version = "0.1.0"
+description = "On-demand sports data scraper (football/basketball/tennis) feeding the primepredict_algo model over local HTTP."
+requires-python = ">=3.12"
+dependencies = [
+    "httpx",
+    "pydantic>=2",
+    "pydantic-settings",
+]
+
+[project.optional-dependencies]
+server = [
+    "fastapi",
+    "uvicorn",
+]
+research = [
+    "scrapling",
+]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "fastapi",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.pytest.ini_options]
+markers = ["live"]
+addopts = ["-m", "not live"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+files = ["src"]
+disallow_untyped_defs = true
+explicit_package_bases = true
+namespace_packages = true

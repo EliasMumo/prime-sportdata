@@ -1,0 +1,24 @@
+# Render Blueprint — prime-sportdata
+# Deploy via: Render dashboard -> New -> Blueprint -> point at this repo,
+# or `render blueprint launch` (Render CLI).
+#
+# The service needs no disk: its cache lives in an ephemeral directory and
+# is advisory only.  Set PRIME_SPORTDATA_ACCESS_TOKEN to a long random value
+# in the Render dashboard (env var); /v1 routes then require
+# `Authorization: Bearer <token>` while /health and /catalog stay open.
+
+services:
+  - type: web
+    name: prime-sportdata
+    runtime: python
+    plan: free
+    buildCommand: pip install -e ".[server]"
+    startCommand: uvicorn prime_sportdata.server.app:app --host 0.0.0.0 --port ${PORT:-8097}
+    healthCheckPath: /health
+    envVars:
+      - key: PRIME_SPORTDATA_CACHE_DIR
+        value: /tmp/prime-sportdata-cache
+      - key: PRIME_SPORTDATA_RATE_LIMIT_INTERVAL
+        value: "1.0"
+      # Generate a long random token (e.g. `openssl rand -hex 32`) and set it
+      # here or via the dashboard: PRIME_SPORTDATA_ACCESS_TOKEN
