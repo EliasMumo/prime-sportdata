@@ -16,6 +16,8 @@ services:
     startCommand: uvicorn prime_sportdata.server.app:app --host 0.0.0.0 --port ${PORT:-8097}
     healthCheckPath: /health
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.7
       - key: PRIME_SPORTDATA_CACHE_DIR
         value: /tmp/prime-sportdata-cache
       - key: PRIME_SPORTDATA_RATE_LIMIT_INTERVAL
