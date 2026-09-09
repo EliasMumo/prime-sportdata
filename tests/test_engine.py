@@ -498,3 +498,29 @@ def test_h2h_envelope_payload_carries_requested_entities(tmp_path: Path) -> None
     assert env.meta.category == "h2h"
     # h2h shares the long TTL bucket; league echoed back
     assert env.meta.request.league == "Premier League"
+
+
+def test_odds_linebet_category_dispatches_to_parse_odds(tmp_path: Path) -> None:
+    """Regression: the linebet-only odds row must hit parse_odds, never events.
+
+    The catalog row was shipped before the engine dispatch knew its name, so
+    hosted calls fell into parse_events and failed with a misleading no_data.
+    """
+
+    class OddsFake(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__("linebet")
+            self.odds_parse_calls = 0
+
+        def parse_odds(self, resp: SourceResponse) -> ParseOutcome:
+            self.odds_parse_calls += 1
+            return ParseOutcome(quotes=[])
+
+    linebet = OddsFake()
+    adapters = make_adapters()
+    adapters["linebet"] = linebet
+    clock, sleeps = FakeClock(), SleepRecorder()
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    envelope = engine.fetch_on_demand("football", "odds_linebet", {"limit": "3"})
+    assert linebet.odds_parse_calls == 1
+    assert envelope.meta.category == "odds_linebet"

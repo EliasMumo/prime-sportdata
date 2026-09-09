@@ -413,7 +413,7 @@ class Engine:
                         sport, category, source, norm, [], warnings=[exc.detail], started=started
                     )
                 try:
-                    if category in ("odds", "odds_detailed"):
+                    if category in ("odds", "odds_detailed", "odds_linebet"):
                         outcome: ParseOutcome = adapter.parse_odds(resp)
                     else:
                         outcome = adapter.parse_events(resp)
