@@ -158,6 +158,33 @@ def linebet_probe() -> JSONResponse:
     )
 
 
+@router.get("/debug/engine-check")
+def engine_check(request: Request, category: str = "odds_linebet", sport: str = "football") -> JSONResponse:
+    """TEMPORARY diagnostic: run the real engine call and report the failure chain."""
+    params: dict[str, str] = {"limit": "3"}
+    for key in ("entity_a", "entity_b"):
+        value = request.query_params.get(key)
+        if value:
+            params[key] = value
+    engine = _engine(request)
+    try:
+        envelope = engine.fetch_on_demand(sport, category, params)
+    except FetchFailed as exc:
+        return JSONResponse(
+            content={
+                "fetch_failed": {
+                    "last_code": exc.last_code,
+                    "detail": exc.detail,
+                    "source": exc.source,
+                    "tried_sources": exc.tried_sources,
+                }
+            }
+        )
+    except PrimeSportDataError as exc:
+        return JSONResponse(content={"error_code": exc.code, "detail": exc.detail})
+    return JSONResponse(content=envelope.model_dump(mode="json"))
+
+
 @router.get("/catalog")
 def catalog() -> JSONResponse:
     rows = [
