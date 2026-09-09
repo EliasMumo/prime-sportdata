@@ -113,6 +113,10 @@ _JITTER_MAX_S = 0.8
 LIST_PAGE_SIZE = 500
 MAX_DETAIL_REQUESTS = 24
 DETAIL_MIN_INTERVAL_S = 1.0
+# Wall-clock budget for the whole detail phase.  The hosted worker must
+# answer the odds/odds_linebet call well inside the proxy timeout (Render
+# free tier kills at ~100s); slower egress simply yields fewer details.
+DETAIL_BUDGET_S = 45.0
 
 _VIRTUAL_MARKERS = ("cyber", "virtual", "esoccer", "e-football", "zoom")
 
@@ -312,7 +316,12 @@ class LinebetAdapter(SourceAdapter):
         if category in {_ODDS_CATEGORY, _ODDS_LINEBET_CATEGORY}:
             details: dict[str, Any] = {}
             detail_skipped: list[str] = []
+            detail_started = self._clock()
             for event in self._select_detail_rows(events):
+                elapsed = self._clock() - detail_started
+                if elapsed >= DETAIL_BUDGET_S:
+                    detail_skipped.append("detail-budget")
+                    break
                 game_id = event.get("CI")
                 if isinstance(game_id, bool) or not isinstance(game_id, (int, float, str)):
                     detail_skipped.append("no-game-id")

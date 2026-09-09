@@ -211,6 +211,31 @@ def test_fetch_odds_linebet_category_serves_odds(adapter: LinebetAdapter, monkey
     assert _BARCELONA_CI in assembled["details"]
 
 
+def test_fetch_odds_stops_details_when_budget_exhausted(monkeypatch) -> None:
+    # A slow upstream must never let the detail phase outlive the hosted
+    # proxy timeout: once the injectable clock passes DETAIL_BUDGET_S, the
+    # remaining rows are skipped with the budget marker.
+    from prime_sportdata.sources import linebet as linebet_module
+
+    now = 0.0
+    adapter = LinebetAdapter(clock=lambda: now, sleep=lambda _: None)
+    responses = [_httpx_response(_list_body(), "https://linebet.com/list")]
+    for _ in _list_body()["Value"]:
+        responses.append(_httpx_response(_gamezip_body(), "https://linebet.com/gamezip"))
+
+    def fake_request(url: str, *, params: dict[str, str]) -> httpx.Response:
+        nonlocal now
+        response = responses.pop(0)
+        now += linebet_module.DETAIL_BUDGET_S  # one detail request consumed it all
+        return response
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    resp = adapter.fetch("football", "odds_linebet", {})
+    assembled = json.loads(resp.payload)
+    assert assembled["detail_skipped"] and "detail-budget" in assembled["detail_skipped"]
+    assert _BARCELONA_CI in assembled["details"]
+
+
 def test_fetch_h2h_matches_pair_and_loads_history(adapter: LinebetAdapter, monkeypatch) -> None:
     responses = [
         _httpx_response(_list_body(), "https://linebet.com/list"),
