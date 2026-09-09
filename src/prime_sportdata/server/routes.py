@@ -26,6 +26,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import cast
 
+import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
@@ -101,6 +102,58 @@ def health(request: Request) -> JSONResponse:
             "status": "ok",
             "sources": {name: view.status for name, view in views.items()},
             "breakers": {name: asdict(view) for name, view in views.items()},
+        }
+    )
+
+
+@router.get("/debug/linebet-probe")
+def linebet_probe() -> JSONResponse:
+    """TEMPORARY diagnostic (remove after diagnosis): raw linebet list fetch.
+
+    Reports exactly what linebet.com returns to THIS host's IP so a
+    geo-dependent failure can be told apart from a transport one.
+    """
+    url = "https://linebet.com/service-api/LineFeed/Get1x2_VZip"
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Referer": "https://linebet.com/en/line/football",
+    }
+    params = {
+        "sports": "1",
+        "count": "5",
+        "lng": "en",
+        "tf": "2200000",
+        "tz": "3",
+        "mode": "4",
+        "country": "87",
+        "partner": "189",
+        "getEmpty": "true",
+    }
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(20.0),
+            headers=headers,
+            follow_redirects=False,
+        ) as client:
+            response = client.get(url, params=params)
+    except httpx.HTTPError as exc:
+        return JSONResponse(content={"transport_error": str(exc)})
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    value = body.get("Value") if isinstance(body, dict) else None
+    return JSONResponse(
+        content={
+            "status_code": response.status_code,
+            "success": body.get("Success") if isinstance(body, dict) else None,
+            "value_count": len(value) if isinstance(value, list) else None,
+            "body_keys": sorted(body.keys()) if isinstance(body, dict) else None,
+            "snippet": (response.text or "")[:200],
         }
     )
 
