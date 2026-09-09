@@ -4,8 +4,8 @@ import pytest
 
 from prime_sportdata.catalog import (
     BETEXPLORER_ODDS,
-    BETIKA_ODDS_DETAILED,
     FLASHSCORE_FIRST,
+    LINEBET_H2H,
     ROWS,
     SOFASCORE_FIRST,
     get_row,
@@ -37,24 +37,27 @@ def test_basketball_and_tennis_all_sofascore_first():
             assert get_row(sport, category).sources_default == SOFASCORE_FIRST
 
 
-def test_odds_rows_betexplorer_only():
-    for sport in SPORTS:
+def test_odds_rows_betexplorer_first():
+    # Football: betexplorer primary with linebet as fallback for the dated
+    # odds category (linebet has no verified date filter).
+    assert get_row("football", "odds").sources_default == ("betexplorer", "linebet")
+    for sport in ("basketball", "tennis"):
         assert get_row(sport, "odds").sources_default == BETEXPLORER_ODDS
         assert get_row(sport, "odds").params == ("date", "league", "limit")
 
 
-def test_odds_detailed_betika_football_only():
-    assert get_row("football", "odds_detailed").sources_default == BETIKA_ODDS_DETAILED
+def test_odds_detailed_betika_first_linebet_fallback_football_only():
+    assert get_row("football", "odds_detailed").sources_default == ("betika", "linebet")
     assert get_row("football", "odds_detailed").params == ("league", "limit")
     with pytest.raises(KeyError):
         get_row("basketball", "odds_detailed")
 
 
-def test_football_h2h_sofascore_first():
-    # Decision (see catalog.py docstring): SPEC table row 1 lists football
-    # categories exhaustively without h2h, and h2h is a structured lookup the
-    # probed-flashscore-HTML evidence does not cover; sofascore JSON API first.
-    assert get_row("football", "h2h").sources_default == SOFASCORE_FIRST
+def test_football_h2h_linebet_first():
+    # Linebet ships its own h2h for pairs with an upcoming fixture (probe-
+    # verified 2026-09-09); the adapter raises NotFound for other pairs so
+    # the engine failover still reaches the score adapters' full databases.
+    assert get_row("football", "h2h").sources_default == LINEBET_H2H
 
 
 def test_default_source_order_matches_row():
@@ -113,5 +116,12 @@ def test_override_rejects_unknown_or_empty_source():
 def test_catalog_module_importable_lookup():
     from prime_sportdata import catalog
 
-    assert catalog.SOURCES == ("flashscore", "sofascore", "livescore", "betexplorer", "betika")
+    assert catalog.SOURCES == (
+        "flashscore",
+        "sofascore",
+        "livescore",
+        "betexplorer",
+        "betika",
+        "linebet",
+    )
     assert len(catalog.ROWS) == 16

@@ -26,6 +26,7 @@ from prime_sportdata.server import routes
 from prime_sportdata.sources.betexplorer import BetexplorerAdapter
 from prime_sportdata.sources.betika import BetikaAdapter
 from prime_sportdata.sources.flashscore import FlashscoreAdapter
+from prime_sportdata.sources.linebet import LinebetAdapter
 from prime_sportdata.sources.livescore import LivescoreAdapter
 from prime_sportdata.sources.sofascore import SofascoreAdapter
 
@@ -55,6 +56,7 @@ def _build_default_engine() -> Engine:
             "livescore": LivescoreAdapter(),
             "betexplorer": BetexplorerAdapter(),
             "betika": BetikaAdapter(),
+            "linebet": LinebetAdapter(),
         },
         cache=DiskCache(cache_dir),
         limiter=RateLimiter(interval=settings.rate_limit_interval),

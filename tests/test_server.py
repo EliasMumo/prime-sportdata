@@ -90,7 +90,10 @@ def make_engine(tmp_path: Path, adapters: Mapping[str, FakeAdapter]) -> Engine:
 
 
 def healthy_adapters() -> dict[str, FakeAdapter]:
-    return {name: FakeAdapter(name) for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika")}
+    return {
+        name: FakeAdapter(name)
+        for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet")
+    }
 
 
 @pytest.fixture()
@@ -114,8 +117,16 @@ def test_health_ok_with_source_and_breaker_states(client: TestClient) -> None:
         "livescore": "untested",
         "betexplorer": "untested",
         "betika": "untested",
+        "linebet": "untested",
     }
-    assert set(body["breakers"]) == {"flashscore", "sofascore", "livescore", "betexplorer", "betika"}
+    assert set(body["breakers"]) == {
+        "flashscore",
+        "sofascore",
+        "livescore",
+        "betexplorer",
+        "betika",
+        "linebet",
+    }
     for view in body["breakers"].values():
         assert view["state"] == "closed"
         assert view["calls"] == 0
@@ -177,7 +188,10 @@ def test_v1_fixtures_returns_200_envelope(client: TestClient) -> None:
 
 
 def test_v1_valid_empty_is_200_events_empty(tmp_path: Path) -> None:
-    adapters = {name: FakeAdapter(name) for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika")}
+    adapters = {
+        name: FakeAdapter(name)
+        for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet")
+    }
     adapters["flashscore"] = FakeAdapter("flashscore", empty=True)
     with TestClient(create_app(make_engine(tmp_path, adapters))) as client:
         resp = client.get("/v1/football/fixtures?date=2026-09-02")

@@ -82,3 +82,22 @@ status: betika adapter now also ships btts (YES/NO), total lines 1.5/2.5/3.5/4.5
 first-half 1x2/double-chance/totals, winning margin, exact goals, corner and
 booking totals — normalized, live-verified shapes only. Gates: pytest 174/9,
 ruff+mypy clean.
+
+## Linebet (2026-09-09)
+status: new LinebetAdapter (source=linebet) from live probes of linebet.com's
+public JSON API: list /service-api/LineFeed/Get1x2_VZip (upcoming slate, 1x2 +
+WP evidence), detail /service-api/LineFeed/GetGameZip (groups 8 double chance,
+19 BTTS, 17 totals, 8863 correct score; HT/FT group 11412 deliberately NOT
+shipped — mixed outcome encoding not unambiguously decodable), and
+/service-api/statisticfeed/api/v1/Game/h2h (true head-to-head meetings via
+entity.gameIds; team-form games excluded).
+status: catalog — football h2h order linebet-first (NotFound on pairs without
+an upcoming fixture so sofascore still serves historical pairs), football odds
+("betexplorer","linebet"), football odds_detailed ("betika","linebet"); engine
+DEFAULT_HOSTS + server app registration.
+status: retry/pacing discipline mirrors betika (2 retries on transport/5xx
+only, static UA, >=1s detail pacing, 24 detail budget, virtual markers
+excluded). Gates: pytest 187 passed/9 deselected, ruff clean, mypy clean.
+Live verification green: /v1/football/h2h Liverpool/Atletico Madrid -> 11 true
+meetings; adapter odds fetch -> 393 quotes over 40 games (1x2 x47, DC x21,
+BTTS x20, CS x20, 38 totals-line markets).

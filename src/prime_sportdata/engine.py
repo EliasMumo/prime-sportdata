@@ -112,6 +112,7 @@ DEFAULT_HOSTS: Mapping[str, str] = {
     "livescore": "www.livescore.com",
     "betexplorer": "www.betexplorer.com",
     "betika": "api.betika.com",
+    "linebet": "linebet.com",
 }
 
 _CLOSED = "closed"

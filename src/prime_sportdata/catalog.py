@@ -20,7 +20,14 @@ from dataclasses import dataclass
 
 from prime_sportdata.models import Category, Sport
 
-SOURCES: tuple[str, ...] = ("flashscore", "sofascore", "livescore", "betexplorer", "betika")
+SOURCES: tuple[str, ...] = (
+    "flashscore",
+    "sofascore",
+    "livescore",
+    "betexplorer",
+    "betika",
+    "linebet",
+)
 
 # Canonical orders (SPEC failover table; both start with the best first).
 FLASHSCORE_FIRST: tuple[str, ...] = ("flashscore", "sofascore", "livescore")
@@ -32,6 +39,14 @@ BETEXPLORER_ODDS: tuple[str, ...] = ("betexplorer",)
 # Detailed markets (HTFT / correct score / totals / double chance) come from
 # Betika's public JSON API (probe-verified 2026-09-08); football only.
 BETIKA_ODDS_DETAILED: tuple[str, ...] = ("betika",)
+# Linebet serves football odds + head-to-head from its own public JSON API
+# (probe-verified 2026-09-09).  Its h2h path is scoped to the site's upcoming
+# slate (the adapter raises NotFound for pairs without an upcoming fixture, so
+# failover proceeds to the score adapters for historical pairs).  Its odds
+# path is an upcoming-slate list like Betika's, so it ships in the detailed
+# category and as a BetExplorer fallback for the dated odds category.
+LINEBET_H2H: tuple[str, ...] = ("linebet", "sofascore", "flashscore", "livescore")
+LINEBET_ODDS: tuple[str, ...] = ("linebet",)
 
 # Per-row supported query params (SPEC "Query params" + API surface).
 FIXTURES_RESULTS_PARAMS: tuple[str, ...] = ("date", "team", "league", "limit")
@@ -64,7 +79,7 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("football", "fixtures", FIXTURES_RESULTS_PARAMS, FLASHSCORE_FIRST),
     CatalogRow("football", "live", LIVE_PARAMS, FLASHSCORE_FIRST),
     CatalogRow("football", "results", FIXTURES_RESULTS_PARAMS, FLASHSCORE_FIRST),
-    CatalogRow("football", "h2h", H2H_PARAMS, SOFASCORE_FIRST),
+    CatalogRow("football", "h2h", H2H_PARAMS, LINEBET_H2H),
     CatalogRow("basketball", "fixtures", FIXTURES_RESULTS_PARAMS, SOFASCORE_FIRST),
     CatalogRow("basketball", "live", LIVE_PARAMS, SOFASCORE_FIRST),
     CatalogRow("basketball", "results", FIXTURES_RESULTS_PARAMS, SOFASCORE_FIRST),
@@ -73,10 +88,10 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("tennis", "live", LIVE_PARAMS, SOFASCORE_FIRST),
     CatalogRow("tennis", "results", FIXTURES_RESULTS_PARAMS, SOFASCORE_FIRST),
     CatalogRow("tennis", "h2h", H2H_PARAMS, SOFASCORE_FIRST),
-    CatalogRow("football", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
+    CatalogRow("football", "odds", ODDS_PARAMS, ("betexplorer", "linebet")),
     CatalogRow("basketball", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("tennis", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
-    CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, BETIKA_ODDS_DETAILED),
+    CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, ("betika", "linebet")),
 )
 
 
