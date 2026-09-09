@@ -196,6 +196,21 @@ def test_fetch_odds_assembles_list_and_details(adapter: LinebetAdapter, monkeypa
     assert assembled["detail_skipped"] == []
 
 
+def test_fetch_odds_linebet_category_serves_odds(adapter: LinebetAdapter, monkeypatch) -> None:
+    responses = [_httpx_response(_list_body(), "https://linebet.com/list")]
+    for _ in _list_body()["Value"]:
+        responses.append(_httpx_response(_gamezip_body(), "https://linebet.com/gamezip"))
+
+    def fake_request(url: str, *, params: dict[str, str]) -> httpx.Response:
+        return responses.pop(0)
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    resp = adapter.fetch("football", "odds_linebet", {})
+    assembled = json.loads(resp.payload)
+    assert assembled["kind"] == "odds"
+    assert _BARCELONA_CI in assembled["details"]
+
+
 def test_fetch_h2h_matches_pair_and_loads_history(adapter: LinebetAdapter, monkeypatch) -> None:
     responses = [
         _httpx_response(_list_body(), "https://linebet.com/list"),

@@ -16,13 +16,17 @@ SPORTS: tuple[str, ...] = ("football", "basketball", "tennis")
 CATEGORIES: tuple[str, ...] = ("fixtures", "live", "results", "h2h", "odds")
 
 
-def test_exactly_sixteen_rows():
-    assert len(ROWS) == 16
+def test_exactly_seventeen_rows():
+    assert len(ROWS) == 17
 
 
 def test_covers_full_sport_x_category_matrix_once():
     pairs = {(row.sport, row.category) for row in ROWS}
-    expected = {(s, c) for s in SPORTS for c in CATEGORIES} | {("football", "odds_detailed")}
+    expected = (
+        {(s, c) for s in SPORTS for c in CATEGORIES}
+        | {("football", "odds_detailed")}
+        | {("football", "odds_linebet")}
+    )
     assert pairs == expected
 
 
@@ -53,11 +57,9 @@ def test_odds_detailed_betika_first_linebet_fallback_football_only():
         get_row("basketball", "odds_detailed")
 
 
-def test_football_h2h_linebet_first():
-    # Linebet ships its own h2h for pairs with an upcoming fixture (probe-
-    # verified 2026-09-09); the adapter raises NotFound for other pairs so
-    # the engine failover still reaches the score adapters' full databases.
-    assert get_row("football", "h2h").sources_default == LINEBET_H2H
+def test_odds_linebet_linebet_only_football():
+    assert get_row("football", "odds_linebet").sources_default == ("linebet",)
+    assert get_row("football", "odds_linebet").params == ("league", "limit")
 
 
 def test_default_source_order_matches_row():
@@ -124,4 +126,11 @@ def test_catalog_module_importable_lookup():
         "betika",
         "linebet",
     )
-    assert len(catalog.ROWS) == 16
+    assert len(catalog.ROWS) == 17
+
+
+def test_football_h2h_linebet_first():
+    # Linebet ships its own h2h for pairs with an upcoming fixture (probe-
+    # verified 2026-09-09); the adapter raises NotFound for other pairs so
+    # the engine failover still reaches the score adapters' full databases.
+    assert get_row("football", "h2h").sources_default == LINEBET_H2H

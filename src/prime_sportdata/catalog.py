@@ -47,6 +47,9 @@ BETIKA_ODDS_DETAILED: tuple[str, ...] = ("betika",)
 # category and as a BetExplorer fallback for the dated odds category.
 LINEBET_H2H: tuple[str, ...] = ("linebet", "sofascore", "flashscore", "livescore")
 LINEBET_ODDS: tuple[str, ...] = ("linebet",)
+# Explicit linebet-only row so callers can consume linebet quotes even when
+# the shared odds/odds_detailed rows are answered by their primary sources
+# (failover stops at the first answering source).
 
 # Per-row supported query params (SPEC "Query params" + API surface).
 FIXTURES_RESULTS_PARAMS: tuple[str, ...] = ("date", "team", "league", "limit")
@@ -92,6 +95,7 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("basketball", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("tennis", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, ("betika", "linebet")),
+    CatalogRow("football", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
 )
 
 

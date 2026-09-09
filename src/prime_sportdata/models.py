@@ -11,7 +11,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 Sport = Literal["football", "basketball", "tennis"]
-Category = Literal["fixtures", "live", "results", "h2h", "odds", "odds_detailed"]
+Category = Literal["fixtures", "live", "results", "h2h", "odds", "odds_detailed", "odds_linebet"]
 EventStatus = Literal["scheduled", "live", "finished", "postponed", "cancelled", "interrupted"]
 
 

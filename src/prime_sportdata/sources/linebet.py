@@ -119,6 +119,8 @@ _VIRTUAL_MARKERS = ("cyber", "virtual", "esoccer", "e-football", "zoom")
 _FOOTBALL = "football"
 _H2H_CATEGORY = "h2h"
 _ODDS_CATEGORY = "odds"
+# Explicit linebet-only catalog row; behaves exactly like the odds category.
+_ODDS_LINEBET_CATEGORY = "odds_linebet"
 
 # 1xBet-style group ids used to decode the verified market groups.
 _GROUP_DOUBLE_CHANCE = 8
@@ -272,7 +274,7 @@ class LinebetAdapter(SourceAdapter):
                 f"linebet ships football-only paths; no verified {sport!r} path",
                 source=self.source,
             )
-        if category not in {_H2H_CATEGORY, _ODDS_CATEGORY}:
+        if category not in {_H2H_CATEGORY, _ODDS_CATEGORY, _ODDS_LINEBET_CATEGORY}:
             raise NotFound(
                 f"linebet ships h2h and odds categories only; no verified "
                 f"{category!r} endpoint",
@@ -307,7 +309,7 @@ class LinebetAdapter(SourceAdapter):
         events = list_payload.get("Value") if isinstance(list_payload, dict) else None
         if not isinstance(events, list) or not events:
             raise NoData("linebet matches payload lacks Value[]", source=self.source)
-        if category == _ODDS_CATEGORY:
+        if category in {_ODDS_CATEGORY, _ODDS_LINEBET_CATEGORY}:
             details: dict[str, Any] = {}
             detail_skipped: list[str] = []
             for event in self._select_detail_rows(events):

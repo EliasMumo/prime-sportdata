@@ -149,15 +149,23 @@ def test_health_reports_open_breaker_after_403(tmp_path: Path) -> None:
 # --- /catalog -----------------------------------------------------------------
 
 
-def test_catalog_lists_all_16_rows_with_params_and_curl(client: TestClient) -> None:
+def test_catalog_lists_all_17_rows_with_params_and_curl(client: TestClient) -> None:
     resp = client.get("/catalog")
     assert resp.status_code == 200
     rows = resp.json()
-    assert len(rows) == 16
+    assert len(rows) == 17
     sports = {row["sport"] for row in rows}
     categories = {row["category"] for row in rows}
     assert sports == {"football", "basketball", "tennis"}
-    assert categories == {"fixtures", "live", "results", "h2h", "odds", "odds_detailed"}
+    assert categories == {
+        "fixtures",
+        "live",
+        "results",
+        "h2h",
+        "odds",
+        "odds_detailed",
+        "odds_linebet",
+    }
     for row in rows:
         assert row["params"] and row["sources"] and row["limit_default"] == 50
         assert row["limit_max"] == 200
