@@ -31,8 +31,18 @@ Retry discipline (SPEC Ban-risk policy): max 2 retries, exponential backoff
 with jitter, ONLY on transport timeouts/errors and HTTP 5xx — never on
 403/429 (those map straight to ``SourceBlocked``/``RateLimited`` and trip the
 engine breaker). One static realistic browser UA, no rotation, single host
-(``api.betika.com``). Detail requests are bounded (``MAX_DETAIL_REQUESTS``)
-and sequential, each >= 1 s apart via the engine rate limiter.
+(``api.betika.com``).
+
+Coverage upgrade (2026-09-09, live-verified): the upcoming list is paginated
+in kickoff order and serves ``limit=500``, so the adapter pages up to
+``MAX_LIST_PAGES`` pages until the slate reaches ``LIST_HORIZON_HOURS`` ahead
+instead of reading page 1 only.  Simulated rows (SRL/Zoom/eSoccer) are
+excluded, and the bounded detail budget (``MAX_DETAIL_REQUESTS``) is spent on
+the fitted model's leagues first (``(competition, country)`` pairs in
+``_PRIORITY_LEAGUES``) so evening top-flight fixtures still get HTFT /
+correct-score details when the day opens with minor-league matches.  Detail
+requests are paced ``DETAIL_MIN_INTERVAL_S`` apart inside the adapter (the
+engine limiter only paces whole adapter calls).
 """
 
 from __future__ import annotations
@@ -40,8 +50,8 @@ from __future__ import annotations
 import json
 import random
 import time
-from collections.abc import Mapping
-from datetime import UTC, datetime
+from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -88,8 +98,20 @@ _JITTER_MAX_S = 0.8
 # safe daily bound; the engine rate limiter keeps them >= 1 s apart.  The
 # list page size is 100 because the upcoming feed mixes many sports and
 # virtual football; only ``sport_name == "Soccer"`` rows are real matches.
-MAX_DETAIL_REQUESTS = 12
-LIST_PAGE_SIZE = 100
+MAX_DETAIL_REQUESTS = 24
+LIST_PAGE_SIZE = 500
+# Pagination is bounded for ban-risk discipline.  The verified list endpoint
+# serves the requested page size (``limit=500`` live-verified 2026-09-09) and
+# returns pages in kickoff order, so a few pages cover the next ~36 h even
+# when the first page is dominated by virtual matches.
+MAX_LIST_PAGES = 5
+LIST_HORIZON_HOURS = 36.0
+DETAIL_MIN_INTERVAL_S = 1.0
+
+# Virtual matches Betika interleaves with real soccer ("Zoom Soccer",
+# "eSoccer", and "SRL" simulated leagues).  SRL rows keep ``sport_name``
+# ``"Soccer"``, so the row-level filter must exclude these markers too.
+_VIRTUAL_MARKERS = ("srl", "zoom", "esoccer")
 
 _FOOTBALL = "football"
 _ODDS_DETAILED_CATEGORY = "odds_detailed"
@@ -106,14 +128,44 @@ _MARKET_DOUBLE_CHANCE = "10"
 # outcome is the site's complete enumeration (verified 26 selections).
 _COMPLETE_SCORE_GRID = frozenset(f"{h}:{a}" for h in range(5) for a in range(5))
 _CORRECT_SCORE_OTHER = "OTHER"
+_FAR_FUTURE = datetime.max.replace(tzinfo=UTC)
+
+# Competitions the fitted PrimePredict football model can consume, keyed by
+# Betika's own (competition_name, category/country) pair.  ``category`` is
+# what separates the real English Premier League (country: England) from
+# Egypt's Premier League (country: Egypt) and real UCL (country:
+# International Clubs) from youth/SRL lookalikes — competition name alone is
+# ambiguous.  Rows in these pairs get the bounded detail-fetch budget first
+# so evening top-flight fixtures are priced before it runs out on morning
+# minor-league matches.
+_PRIORITY_LEAGUES = frozenset(
+    {
+        ("premier league", "england"),
+        ("la liga", "spain"),
+        ("laliga", "spain"),
+        ("primera division", "spain"),
+        ("serie a", "italy"),
+        ("bundesliga", "germany"),
+        ("ligue 1", "france"),
+        ("eredivisie", "netherlands"),
+        ("championship", "england"),
+        ("uefa champions league", "international clubs"),
+        ("uefa europa league", "international clubs"),
+        ("uefa conference league", "international clubs"),
+    }
+)
 
 
 def _sleep_backoff(attempt: int) -> None:
     time.sleep(_BACKOFF_BASE_S * (2**attempt) + random.uniform(0.0, _JITTER_MAX_S))
 
 
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
 def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return _utc_now().isoformat()
 
 
 def _start_time_utc(raw: str | None) -> str | None:
@@ -128,10 +180,104 @@ def _start_time_utc(raw: str | None) -> str | None:
     return local.replace(tzinfo=nairobi).astimezone(UTC).isoformat()
 
 
+def _row_start_time_utc(row: Mapping[str, Any]) -> datetime | None:
+    """Parsed aware-UTC kickoff for one list row, or None when unusable."""
+    iso = _start_time_utc(str(row.get("start_time") or ""))
+    if iso is None:
+        return None
+    try:
+        return datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+
+
+def _is_virtual_row(row: Mapping[str, Any]) -> bool:
+    """True when a list row is a simulated/virtual soccer match."""
+    competition = str(row.get("competition_name") or "").casefold()
+    home = str(row.get("home_team") or "").casefold()
+    away = str(row.get("away_team") or "").casefold()
+    return any(
+        marker in competition or marker in home or marker in away
+        for marker in _VIRTUAL_MARKERS
+    )
+
+
+def _row_priority(row: Mapping[str, Any]) -> int:
+    """0 for the fitted model's leagues, 1 otherwise.
+
+    Uses the row's ``(competition_name, category)`` pair because Betika reuses
+    generic names across countries (Egypt's "Premier League", Armenia's
+    "Premier League", ...) and labels youth/SRL feeds with senior-sounding
+    competition names.
+    """
+    competition = " ".join(str(row.get("competition_name") or "").casefold().split())
+    country = " ".join(str(row.get("category") or "").casefold().split())
+    return 0 if (competition, country) in _PRIORITY_LEAGUES else 1
+
+
+def _select_detail_rows(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    max_requests: int,
+    horizon: datetime,
+) -> list[dict[str, Any]]:
+    """Spend the detail budget across the whole slate, not just the head.
+
+    The upcoming list is kickoff-ordered, so a naive first-N loop prices only
+    the next few morning matches.  Selecting by competition priority first and
+    kickoff second keeps evening top-flight fixtures inside the budget.
+    """
+    with_kickoffs: list[tuple[dict[str, Any], datetime]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if row.get("sport_name") != _SOCCER_SPORT_NAME or _is_virtual_row(row):
+            continue
+        kickoff = _row_start_time_utc(row)
+        if kickoff is not None and kickoff <= horizon:
+            with_kickoffs.append((dict(row), kickoff))
+    with_kickoffs.sort(
+        key=lambda item: (
+            _row_priority(item[0]),
+            item[1],
+        )
+    )
+    return [row for row, _kickoff in with_kickoffs[:max_requests]]
+
+
 class BetikaAdapter(SourceAdapter):
     """Betika odds adapter: football HTFT/correct-score/total/1X2 via JSON API."""
 
     source: ClassVar[str] = "betika"
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        now_utc: Callable[[], datetime] = _utc_now,
+        min_detail_interval_s: float = DETAIL_MIN_INTERVAL_S,
+    ) -> None:
+        self._clock = clock
+        self._sleep = sleep
+        self._now_utc = now_utc
+        self._min_detail_interval_s = min_detail_interval_s
+        self._last_detail_at: float | None = None
+
+    def _pace_detail_request(self) -> None:
+        """Keep detail hits >= ``min_detail_interval_s`` apart (injectable).
+
+        The engine rate limiter paces whole adapter calls, not the many
+        internal requests a paginated fetch makes, so the adapter must pace
+        its own detail burst (SPEC ban-risk policy).
+        """
+        now = self._clock()
+        if self._last_detail_at is not None:
+            wait = self._min_detail_interval_s - (now - self._last_detail_at)
+            if wait > 0:
+                self._sleep(wait)
+                now = self._clock()
+        self._last_detail_at = now
 
     # -- contract -----------------------------------------------------------
 
@@ -156,27 +302,53 @@ class BetikaAdapter(SourceAdapter):
                 "site's upcoming list",
                 source=self.source,
             )
-        list_resp = self._request(
-            f"{BASE_URL}{_LIST_PATH}",
-            params={"page": "1", "limit": str(LIST_PAGE_SIZE), "tab": "upcoming", "sub_type_id": "1"},
-        )
-        try:
-            list_payload = list_resp.json()
-        except ValueError as exc:
-            raise NoData(f"betika matches payload is not JSON: {exc}", source=self.source) from exc
-        rows = list_payload.get("data") if isinstance(list_payload, dict) else None
-        if not isinstance(rows, list) or not rows:
-            raise NoData("betika matches payload lacks data[]", source=self.source)
-        details: dict[str, dict[str, Any]] = {}
-        fetched = 0
-        for row in rows:
-            if fetched >= MAX_DETAIL_REQUESTS:
+        horizon = self._now_utc() + timedelta(hours=LIST_HORIZON_HOURS)
+        collected: list[dict[str, Any]] = []
+        for page_number in range(1, MAX_LIST_PAGES + 1):
+            list_resp = self._request(
+                f"{BASE_URL}{_LIST_PATH}",
+                params={
+                    "page": str(page_number),
+                    "limit": str(LIST_PAGE_SIZE),
+                    "tab": "upcoming",
+                    "sub_type_id": "1",
+                },
+            )
+            try:
+                list_payload = list_resp.json()
+            except ValueError as exc:
+                raise NoData(
+                    f"betika matches payload is not JSON: {exc}",
+                    source=self.source,
+                ) from exc
+            page_rows = list_payload.get("data") if isinstance(list_payload, dict) else None
+            if not isinstance(page_rows, list) or not page_rows:
+                if page_number == 1:
+                    raise NoData("betika matches payload lacks data[]", source=self.source)
                 break
-            if not isinstance(row, dict) or row.get("sport_name") != _SOCCER_SPORT_NAME:
-                continue
+            collected.extend(row for row in page_rows if isinstance(row, dict))
+            furthest_kickoff = max(
+                (
+                    kickoff
+                    for row in collected
+                    if (kickoff := _row_start_time_utc(row)) is not None
+                ),
+                default=None,
+            )
+            if furthest_kickoff is not None and furthest_kickoff >= horizon:
+                break
+        rows = collected
+        detail_targets = _select_detail_rows(
+            rows,
+            max_requests=MAX_DETAIL_REQUESTS,
+            horizon=horizon,
+        )
+        details: dict[str, dict[str, Any]] = {}
+        for row in detail_targets:
             match_id = row.get("parent_match_id")
             if not match_id:
                 continue
+            self._pace_detail_request()
             detail_resp = self._request(
                 f"{BASE_URL}{_DETAIL_PATH}",
                 params={"parent_match_id": str(match_id)},
@@ -186,7 +358,6 @@ class BetikaAdapter(SourceAdapter):
             except ValueError:
                 continue  # unusable detail: skip this match, never fabricate
             details[str(match_id)] = detail
-            fetched += 1
         assembled: dict[str, Any] = {"rows": rows, "details": details}
         return SourceResponse(
             source=self.source,
@@ -234,8 +405,26 @@ class BetikaAdapter(SourceAdapter):
         ]
         quotes: list[OddsQuote] = []
         skipped: dict[str, int] = {}
-        for row in rows:
-            if not isinstance(row, dict) or row.get("sport_name") != _SOCCER_SPORT_NAME:
+        soccer_rows = [
+            row
+            for row in rows
+            if isinstance(row, dict) and row.get("sport_name") == _SOCCER_SPORT_NAME
+        ]
+        # Emit rows with fetched details first so a caller-side ``limit``
+        # truncation keeps the detailed HTFT/correct-score quotes instead of
+        # dropping them off the tail of the kickoff-ordered list.
+        ordered_rows = sorted(
+            soccer_rows,
+            key=lambda row: (
+                0 if str(row.get("parent_match_id") or "") in details else 1,
+                _row_priority(row),
+                _row_start_time_utc(row) or _FAR_FUTURE,
+            ),
+        )
+        for row in ordered_rows:
+            if _is_virtual_row(row):
+                reason = "virtual soccer row (SRL/Zoom/eSoccer)"
+                skipped[reason] = skipped.get(reason, 0) + 1
                 continue
             match_id = row.get("parent_match_id")
             if not match_id:

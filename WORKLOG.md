@@ -64,3 +64,15 @@ the running :8097 service with real quotes and UTC kickoffs.
 status: algo integration — primepredict_algo fallback collector
 collect_sportdata_odds + SportdataOddsClient (observed-only provenance, never
 execution prices); 655 algo tests pass; readiness --require-odds passes.
+
+## Coverage upgrade (2026-09-09)
+status: betika adapter now paginates the upcoming list (limit=500, max 5 pages,
+36h horizon), excludes SRL/Zoom/eSoccer virtual rows, and paces detail
+requests >=1s inside the adapter (engine limiter only paces whole calls).
+status: detail budget (24) is spent on the fitted model's leagues first, keyed
+by (competition_name, category) pairs so Egypt "Premier League", youth and SRL
+lookalikes don't crowd out real evening fixtures.
+status: parse_odds emits detailed rows first so caller-side limit truncation
+keeps HTFT/correct-score quotes. Gates: pytest 173 passed/9 deselected, ruff
+clean, mypy clean. Live /v1/football/odds_detailed verified: all six evening
+UCL fixtures carry 1x2 + htft(9) + correct_score(26) + dc + total_2_5.
