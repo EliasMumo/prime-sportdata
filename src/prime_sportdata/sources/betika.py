@@ -135,6 +135,7 @@ _MARKET_WINNING_MARGIN = "15"
 _MARKET_EXACT_GOALS = "21"
 _MARKET_CORNERS_TOTAL = "166"
 _MARKET_BOOKINGS_TOTAL = "139"
+_MARKET_FIRST_HALF_CORRECT_SCORE = "81"
 
 _TOTAL_SUB_TYPES = frozenset(
     {
@@ -154,6 +155,7 @@ _TOTAL_MARKET_PREFIX = {
 # Correct score completeness: a 0..4 home/away grid plus an explicit "OTHER"
 # outcome is the site's complete enumeration (verified 26 selections).
 _COMPLETE_SCORE_GRID = frozenset(f"{h}:{a}" for h in range(5) for a in range(5))
+_HALF_TIME_SCORE_GRID = frozenset(f"{h}:{a}" for h in range(3) for a in range(3))
 _CORRECT_SCORE_OTHER = "OTHER"
 _FAR_FUTURE = datetime.max.replace(tzinfo=UTC)
 
@@ -544,6 +546,9 @@ class BetikaAdapter(SourceAdapter):
         correct_score = markets.get(_MARKET_CORRECT_SCORE)
         if correct_score and self._complete_score_map(correct_score):
             quotes.append(quote("correct_score", correct_score))
+        first_half_correct_score = markets.get("first_half_correct_score")
+        if first_half_correct_score and self._complete_half_time_score_map(first_half_correct_score):
+            quotes.append(quote("first_half_correct_score", first_half_correct_score))
         btts = markets.get("btts")
         if btts and set(btts) == {"yes", "no"}:
             quotes.append(quote("btts", btts))
@@ -580,6 +585,16 @@ class BetikaAdapter(SourceAdapter):
         keys = set(prices)
         return _COMPLETE_SCORE_GRID <= keys and _CORRECT_SCORE_OTHER in keys
 
+    @staticmethod
+    def _complete_half_time_score_map(prices: dict[str, float]) -> bool:
+        """Attest completeness: full 0..2 half-time grid plus an explicit OTHER.
+
+        Live-verified 2026-09-09: Betika's first-half correct score market
+        prices 0:0..2:2 plus an OTHER tail (10 outcomes).
+        """
+        keys = set(prices)
+        return _HALF_TIME_SCORE_GRID <= keys and _CORRECT_SCORE_OTHER in keys
+
     def _market_map(self, detail: dict[str, Any] | None) -> dict[str, dict[str, float]]:
         """Extract shipped markets from one match-detail payload."""
         markets: dict[str, dict[str, float]] = {}
@@ -605,6 +620,7 @@ class BetikaAdapter(SourceAdapter):
                 _MARKET_EXACT_GOALS,
                 _MARKET_CORNERS_TOTAL,
                 _MARKET_BOOKINGS_TOTAL,
+                _MARKET_FIRST_HALF_CORRECT_SCORE,
             }:
                 continue
             for outcome in odds:
@@ -644,6 +660,9 @@ class BetikaAdapter(SourceAdapter):
                 elif sub_type == _MARKET_CORRECT_SCORE:
                     label = display.upper() if display.upper() == _CORRECT_SCORE_OTHER else display
                     markets.setdefault(_MARKET_CORRECT_SCORE, {})[label] = value
+                elif sub_type == _MARKET_FIRST_HALF_CORRECT_SCORE:
+                    label = display.upper() if display.upper() == _CORRECT_SCORE_OTHER else display
+                    markets.setdefault("first_half_correct_score", {})[label] = value
                 elif sub_type == _MARKET_BTTS:
                     normalized = {"YES": "yes", "NO": "no"}.get(display.upper())
                     if normalized is not None:

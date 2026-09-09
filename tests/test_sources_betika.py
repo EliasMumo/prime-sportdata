@@ -49,6 +49,7 @@ def test_parse_odds_emits_1x2_htft_correct_score(adapter: BetikaAdapter) -> None
     assert "1x2" in markets
     assert "htft" in markets
     assert "correct_score" in markets
+    assert "first_half_correct_score" in markets
     assert "total_2_5" in markets
     assert "double_chance" in markets
 
@@ -71,6 +72,20 @@ def test_parse_odds_correct_score_complete_grid(adapter: BetikaAdapter) -> None:
         for away in range(5):
             assert f"{home}:{away}" in cs.prices
     assert "OTHER" in cs.prices
+
+
+def test_parse_odds_first_half_correct_score_grid(adapter: BetikaAdapter) -> None:
+    outcome = adapter.parse_odds(_assembled_response())
+    ht_cs = next(
+        q for q in outcome.quotes if q.market == "first_half_correct_score"
+    )
+    assert len(ht_cs.prices) == 10
+    for home in range(3):
+        for away in range(3):
+            assert f"{home}:{away}" in ht_cs.prices
+    assert "OTHER" in ht_cs.prices
+    assert ht_cs.prices["0:0"] == 3.0
+    assert ht_cs.bookmaker == "betika"
 
 
 def test_parse_odds_metadata(adapter: BetikaAdapter) -> None:
