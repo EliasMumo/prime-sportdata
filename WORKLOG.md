@@ -101,3 +101,12 @@ excluded). Gates: pytest 187 passed/9 deselected, ruff clean, mypy clean.
 Live verification green: /v1/football/h2h Liverpool/Atletico Madrid -> 11 true
 meetings; adapter odds fetch -> 393 quotes over 40 games (1x2 x47, DC x21,
 BTTS x20, CS x20, 38 totals-line markets).
+
+## Linebet consumption row (2026-09-09)
+status: new football/odds_linebet catalog row (sources=linebet only) so
+callers can consume linebet quotes even when odds/odds_detailed are answered
+by their primary sources; LinebetAdapter serves the alias identically to the
+odds category. Catalog now 17 rows. Gates: pytest 189/9, ruff+mypy clean.
+Consumed by primepredict_algo (commit c7c6e98) as a supplement merged with
+Betika per-selection precedence; Production EXECUTION_BOOKMAKER_ALLOWLIST now
+includes linebet (betfair_ex_uk,williamhill,betika,linebet).
