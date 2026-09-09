@@ -298,6 +298,82 @@ def test_parse_odds_emits_detailed_rows_first(adapter: BetikaAdapter) -> None:
     assert outcome.quotes[0].external.source_event_id == "73159940"
 
 
+def _evidence_detail_response() -> SourceResponse:
+    """Assembled response whose detail carries the extended market groups."""
+    rows = json.loads((FIXTURES / "betika_matches.json").read_text(encoding="utf-8"))["data"]
+    detail = {
+        "data": [
+            {"sub_type_id": "29", "odds": [
+                {"display": "YES", "odd_value": "1.80"},
+                {"display": "NO", "odd_value": "1.95"},
+            ]},
+            {"sub_type_id": "18", "odds": [
+                {"display": "OVER 1.5", "special_bet_value": "total=1.5", "odd_value": "1.20"},
+                {"display": "UNDER 1.5", "special_bet_value": "total=1.5", "odd_value": "4.40"},
+                {"display": "OVER 2.5", "special_bet_value": "total=2.5", "odd_value": "1.85"},
+                {"display": "UNDER 2.5", "special_bet_value": "total=2.5", "odd_value": "1.95"},
+                {"display": "OVER 3.5", "special_bet_value": "total=3.5", "odd_value": "3.10"},
+                {"display": "UNDER 3.5", "special_bet_value": "total=3.5", "odd_value": "1.35"},
+            ]},
+            {"sub_type_id": "60", "odds": [
+                {"display": "1", "odd_value": "2.60"},
+                {"display": "X", "odd_value": "3.10"},
+                {"display": "2", "odd_value": "2.75"},
+            ]},
+            {"sub_type_id": "63", "odds": [
+                {"display": "1/X", "odd_value": "1.40"},
+                {"display": "X/2", "odd_value": "1.45"},
+                {"display": "1/2", "odd_value": "1.30"},
+            ]},
+            {"sub_type_id": "68", "odds": [
+                {"display": "OVER 0.5", "special_bet_value": "total=0.5", "odd_value": "1.15"},
+                {"display": "UNDER 0.5", "special_bet_value": "total=0.5", "odd_value": "5.00"},
+            ]},
+            {"sub_type_id": "15", "odds": [
+                {"display": "1 BY 1", "odd_value": "3.30"},
+                {"display": "X", "odd_value": "4.20"},
+            ]},
+            {"sub_type_id": "21", "odds": [
+                {"display": "2", "odd_value": "3.60"},
+                {"display": "3", "odd_value": "5.00"},
+                {"display": "6+", "odd_value": "21.00"},
+            ]},
+            {"sub_type_id": "166", "odds": [
+                {"display": "OVER 6.5", "odd_value": "1.70"},
+                {"display": "UNDER 6.5", "odd_value": "2.05"},
+            ]},
+            {"sub_type_id": "139", "odds": [
+                {"display": "OVER 1.5", "odd_value": "1.40"},
+                {"display": "UNDER 1.5", "odd_value": "2.70"},
+            ]},
+        ]
+    }
+    payload = json.dumps({"rows": rows, "details": {"73159940": detail}})
+    return SourceResponse(
+        source="betika",
+        payload=payload,
+        url="https://api.betika.com/v1/uo/matches",
+        status=200,
+        fetched_at="2026-09-08T10:00:00+00:00",
+    )
+
+
+def test_parse_odds_emits_extended_evidence_markets(adapter: BetikaAdapter) -> None:
+    outcome = adapter.parse_odds(_evidence_detail_response())
+    markets = {q.market: q.prices for q in outcome.quotes}
+    assert markets["btts"] == {"yes": 1.80, "no": 1.95}
+    assert markets["total_1_5"] == {"over": 1.20, "under": 4.40}
+    assert markets["total_2_5"] == {"over": 1.85, "under": 1.95}
+    assert markets["total_3_5"] == {"over": 3.10, "under": 1.35}
+    assert markets["first_half_1x2"] == {"1": 2.60, "X": 3.10, "2": 2.75}
+    assert markets["first_half_double_chance"] == {"1X": 1.40, "X2": 1.45, "12": 1.30}
+    assert markets["first_half_total_0_5"] == {"over": 1.15, "under": 5.00}
+    assert markets["winning_margin"] == {"1_BY_1": 3.30, "X": 4.20}
+    assert markets["exact_goals"] == {"2": 3.60, "3": 5.00, "6+": 21.00}
+    assert markets["corners_total_6_5"] == {"over": 1.70, "under": 2.05}
+    assert markets["bookings_total_1_5"] == {"over": 1.40, "under": 2.70}
+
+
 def test_complete_score_map_requires_grid_and_other(adapter: BetikaAdapter) -> None:
     grid = {f"{h}:{a}": 8.0 for h in range(5) for a in range(5)}
     grid["OTHER"] = 24.0

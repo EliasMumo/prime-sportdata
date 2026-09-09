@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
@@ -123,6 +124,32 @@ _MARKET_TOTAL = "18"
 _MARKET_CORRECT_SCORE = "45"
 _MARKET_HTFT = "47"
 _MARKET_DOUBLE_CHANCE = "10"
+# Evidence markets added 2026-09-09 (same live-verified detail payload):
+# both teams to score, first-half markets, additional total lines, winning
+# margin, exact goals, corner and booking totals.
+_MARKET_BTTS = "29"
+_MARKET_FIRST_HALF_1X2 = "60"
+_MARKET_FIRST_HALF_DC = "63"
+_MARKET_FIRST_HALF_TOTAL = "68"
+_MARKET_WINNING_MARGIN = "15"
+_MARKET_EXACT_GOALS = "21"
+_MARKET_CORNERS_TOTAL = "166"
+_MARKET_BOOKINGS_TOTAL = "139"
+
+_TOTAL_SUB_TYPES = frozenset(
+    {
+        _MARKET_TOTAL,
+        _MARKET_FIRST_HALF_TOTAL,
+        _MARKET_CORNERS_TOTAL,
+        _MARKET_BOOKINGS_TOTAL,
+    }
+)
+_TOTAL_MARKET_PREFIX = {
+    _MARKET_TOTAL: "total",
+    _MARKET_FIRST_HALF_TOTAL: "first_half_total",
+    _MARKET_CORNERS_TOTAL: "corners_total",
+    _MARKET_BOOKINGS_TOTAL: "bookings_total",
+}
 
 # Correct score completeness: a 0..4 home/away grid plus an explicit "OTHER"
 # outcome is the site's complete enumeration (verified 26 selections).
@@ -189,6 +216,28 @@ def _row_start_time_utc(row: Mapping[str, Any]) -> datetime | None:
         return datetime.fromisoformat(iso)
     except ValueError:
         return None
+
+
+def _total_line_key(special: str, display: str) -> str | None:
+    """Normalized total line key (``2_5``) from a total-market outcome.
+
+    Betika carries the line in ``special_bet_value`` (``total=2.5``) for goal
+    totals; corner/booking displays embed it instead (``OVER 10.5``).
+    """
+    line = ""
+    if "total=" in special:
+        line = special.partition("total=")[2].strip()
+    else:
+        match = re.search(r"([0-9]+(?:\.[0-9]+)?)\s*$", display)
+        if match:
+            line = match.group(1)
+    if not line:
+        return None
+    try:
+        float(line)
+    except ValueError:
+        return None
+    return line.replace(".", "_")
 
 
 def _is_virtual_row(row: Mapping[str, Any]) -> bool:
@@ -495,12 +544,34 @@ class BetikaAdapter(SourceAdapter):
         correct_score = markets.get(_MARKET_CORRECT_SCORE)
         if correct_score and self._complete_score_map(correct_score):
             quotes.append(quote("correct_score", correct_score))
-        total_2_5 = markets.get(f"{_MARKET_TOTAL}:2.5")
-        if total_2_5:
-            quotes.append(quote("total_2_5", total_2_5))
+        btts = markets.get("btts")
+        if btts and set(btts) == {"yes", "no"}:
+            quotes.append(quote("btts", btts))
+        for market_key in sorted(
+            key
+            for key in markets
+            if key.startswith(
+                ("total:", "first_half_total:", "corners_total:", "bookings_total:")
+            )
+        ):
+            prices = markets[market_key]
+            if set(prices) == {"over", "under"}:
+                quotes.append(quote(market_key.replace(":", "_"), prices))
         double_chance = markets.get(_MARKET_DOUBLE_CHANCE)
         if double_chance and len(double_chance) == 3:
             quotes.append(quote("double_chance", double_chance))
+        first_half_1x2 = markets.get("first_half_1x2")
+        if first_half_1x2 and set(first_half_1x2) == {"1", "X", "2"}:
+            quotes.append(quote("first_half_1x2", first_half_1x2))
+        first_half_dc = markets.get("first_half_double_chance")
+        if first_half_dc and len(first_half_dc) == 3:
+            quotes.append(quote("first_half_double_chance", first_half_dc))
+        winning_margin = markets.get("winning_margin")
+        if winning_margin:
+            quotes.append(quote("winning_margin", winning_margin))
+        exact_goals = markets.get("exact_goals")
+        if exact_goals:
+            quotes.append(quote("exact_goals", exact_goals))
         return quotes
 
     @staticmethod
@@ -526,6 +597,14 @@ class BetikaAdapter(SourceAdapter):
                 _MARKET_CORRECT_SCORE,
                 _MARKET_HTFT,
                 _MARKET_DOUBLE_CHANCE,
+                _MARKET_BTTS,
+                _MARKET_FIRST_HALF_1X2,
+                _MARKET_FIRST_HALF_DC,
+                _MARKET_FIRST_HALF_TOTAL,
+                _MARKET_WINNING_MARGIN,
+                _MARKET_EXACT_GOALS,
+                _MARKET_CORNERS_TOTAL,
+                _MARKET_BOOKINGS_TOTAL,
             }:
                 continue
             for outcome in odds:
@@ -541,20 +620,41 @@ class BetikaAdapter(SourceAdapter):
                     continue
                 if not value > 1.0:
                     continue
-                if sub_type == _MARKET_TOTAL:
+                if sub_type in _TOTAL_SUB_TYPES:
                     special = str(outcome.get("special_bet_value") or "")
-                    if "total=2.5" not in special:
+                    line_key = _total_line_key(special, display)
+                    if line_key is None:
                         continue
                     if display.upper().startswith("OVER"):
-                        markets.setdefault(f"{_MARKET_TOTAL}:2.5", {})["over"] = value
+                        side = "over"
                     elif display.upper().startswith("UNDER"):
-                        markets.setdefault(f"{_MARKET_TOTAL}:2.5", {})["under"] = value
-                elif sub_type == _MARKET_DOUBLE_CHANCE:
+                        side = "under"
+                    else:
+                        continue
+                    prefix = _TOTAL_MARKET_PREFIX[sub_type]
+                    markets.setdefault(f"{prefix}:{line_key}", {})[side] = value
+                elif sub_type in {_MARKET_DOUBLE_CHANCE, _MARKET_FIRST_HALF_DC}:
                     mapped = {"1/X": "1X", "X/2": "X2", "1/2": "12"}.get(display, display)
-                    markets.setdefault(_MARKET_DOUBLE_CHANCE, {})[mapped] = value
+                    market_name = (
+                        _MARKET_DOUBLE_CHANCE
+                        if sub_type == _MARKET_DOUBLE_CHANCE
+                        else "first_half_double_chance"
+                    )
+                    markets.setdefault(market_name, {})[mapped] = value
                 elif sub_type == _MARKET_CORRECT_SCORE:
                     label = display.upper() if display.upper() == _CORRECT_SCORE_OTHER else display
                     markets.setdefault(_MARKET_CORRECT_SCORE, {})[label] = value
+                elif sub_type == _MARKET_BTTS:
+                    normalized = {"YES": "yes", "NO": "no"}.get(display.upper())
+                    if normalized is not None:
+                        markets.setdefault("btts", {})[normalized] = value
+                elif sub_type == _MARKET_FIRST_HALF_1X2:
+                    markets.setdefault("first_half_1x2", {})[display] = value
+                elif sub_type == _MARKET_WINNING_MARGIN:
+                    label = display.upper().replace(" ", "_")
+                    markets.setdefault("winning_margin", {})[label] = value
+                elif sub_type == _MARKET_EXACT_GOALS:
+                    markets.setdefault("exact_goals", {})[display] = value
                 else:
                     markets.setdefault(sub_type, {})[display] = value
         return markets

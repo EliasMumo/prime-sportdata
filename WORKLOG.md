@@ -76,3 +76,9 @@ status: parse_odds emits detailed rows first so caller-side limit truncation
 keeps HTFT/correct-score quotes. Gates: pytest 173 passed/9 deselected, ruff
 clean, mypy clean. Live /v1/football/odds_detailed verified: all six evening
 UCL fixtures carry 1x2 + htft(9) + correct_score(26) + dc + total_2_5.
+
+## Extended markets (2026-09-09)
+status: betika adapter now also ships btts (YES/NO), total lines 1.5/2.5/3.5/4.5/5.5,
+first-half 1x2/double-chance/totals, winning margin, exact goals, corner and
+booking totals — normalized, live-verified shapes only. Gates: pytest 174/9,
+ruff+mypy clean.
