@@ -496,7 +496,7 @@ class Engine:
                 home=H2HEntity(name=norm.get("entity_a") or ""),
                 away=H2HEntity(name=norm.get("entity_b") or ""),
             )
-        if category in ("odds", "odds_detailed"):
+        if category in ("odds", "odds_detailed", "odds_linebet"):
             return OddsPayload(quotes=list(quotes))
         return EventsPayload(events=list(events))
 

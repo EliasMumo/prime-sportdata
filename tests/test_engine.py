@@ -24,7 +24,16 @@ from prime_sportdata.errors import (
     SourceBlocked,
     SourceUnavailable,
 )
-from prime_sportdata.models import Envelope, Event, EventsPayload, ExternalRef, H2HPayload, Team
+from prime_sportdata.models import (
+    Envelope,
+    Event,
+    EventsPayload,
+    ExternalRef,
+    H2HPayload,
+    OddsPayload,
+    OddsQuote,
+    Team,
+)
 from prime_sportdata.rate_limit import RateLimiter
 from prime_sportdata.sources.base import ParseOutcome, SourceAdapter, SourceResponse
 
@@ -507,6 +516,17 @@ def test_odds_linebet_category_dispatches_to_parse_odds(tmp_path: Path) -> None:
     hosted calls fell into parse_events and failed with a misleading no_data.
     """
 
+    sample_quote = OddsQuote(
+        sport="football",
+        external=ExternalRef(source="linebet", source_event_id="evt-1"),
+        start_time_utc=None,
+        home="Team A",
+        away="Team B",
+        market="btts",
+        bookmaker="linebet",
+        prices={"yes": 1.8, "no": 2.0},
+    )
+
     class OddsFake(FakeAdapter):
         def __init__(self) -> None:
             super().__init__("linebet")
@@ -514,7 +534,7 @@ def test_odds_linebet_category_dispatches_to_parse_odds(tmp_path: Path) -> None:
 
         def parse_odds(self, resp: SourceResponse) -> ParseOutcome:
             self.odds_parse_calls += 1
-            return ParseOutcome(quotes=[])
+            return ParseOutcome(quotes=[sample_quote])
 
     linebet = OddsFake()
     adapters = make_adapters()
@@ -524,3 +544,8 @@ def test_odds_linebet_category_dispatches_to_parse_odds(tmp_path: Path) -> None:
     envelope = engine.fetch_on_demand("football", "odds_linebet", {"limit": "3"})
     assert linebet.odds_parse_calls == 1
     assert envelope.meta.category == "odds_linebet"
+    # Regression: parsed odds_linebet quotes must be shipped as an odds
+    # payload.  The response builder previously fell through to the events
+    # branch and silently dropped every linebet quote.
+    assert isinstance(envelope.data, OddsPayload)
+    assert envelope.data.quotes == [sample_quote]
