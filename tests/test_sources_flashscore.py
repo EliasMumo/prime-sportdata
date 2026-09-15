@@ -376,7 +376,7 @@ def test_fetch_unverified_offsets_raise_not_found_with_evidence(
     for future_date in ("2026-09-04", "2026-09-10"):
         with pytest.raises(NotFound) as excinfo:
             adapter.fetch("football", "fixtures", {"date": future_date})
-        assert "2026-09-02" in excinfo.value.detail  # probe evidence quoted
+        assert "-7" in excinfo.value.detail  # verified range evidence quoted
     with pytest.raises(NotFound):
         adapter.fetch("football", "results", {"date": "2026-08-01"})
 

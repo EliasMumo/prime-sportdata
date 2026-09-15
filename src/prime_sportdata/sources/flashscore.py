@@ -129,9 +129,11 @@ _CATEGORIES = ("fixtures", "live", "results", "h2h")
 _SPORT_IDS: dict[str, int] = {"football": 1, "tennis": 2, "basketball": 3}
 _SPORT_BY_ID: dict[str, Sport] = {"1": "football", "2": "tennis", "3": "basketball"}
 # Day-feed shape suffix; only day offsets within VERIFIED_DAY_OFFSETS may be
-# requested (probed live 2026-09-02: f_<s>_{-1,0,1}_3_en_2 all HTTP 200).
+# requested.  Offsets -1..+1 were probed live on 2026-09-02; offsets -7..-2
+# were probed live on 2026-09-15 for football, tennis, and basketball
+# (f_<s>_<offset>_3_en_2 -> HTTP 200 with data; offset -8 -> 401).
 _FEED_TAIL = "3_en_2"
-VERIFIED_DAY_OFFSETS: tuple[int, ...] = (-1, 0, 1)
+VERIFIED_DAY_OFFSETS: tuple[int, ...] = tuple(range(-7, 2))
 _CONNECT_TIMEOUT_S = 12.0
 _MAX_RETRIES = 2
 _BACKOFF_BASE_S = 1.5
@@ -327,9 +329,9 @@ class FlashscoreAdapter(SourceAdapter):
 
         Defaults: fixtures -> Prague today (0), results -> Prague yesterday
         (-1, where the day's matches are all finished). Only offsets in
-        VERIFIED_DAY_OFFSETS (-1/0/+1, probed live 2026-09-02) may be
-        requested; anything else is an honest ``NotFound`` with evidence —
-        never an unverified feed guess.
+        VERIFIED_DAY_OFFSETS (-7..+1, probed live 2026-09-02 and
+        2026-09-15) may be requested; anything else is an honest
+        ``NotFound`` with evidence — never an unverified feed guess.
         """
         raw_date = str(params.get("date") or "").strip() if hasattr(params, "get") else ""
         if raw_date:
@@ -347,7 +349,7 @@ class FlashscoreAdapter(SourceAdapter):
             raise NotFound(
                 f"day offset {offset} (date {wanted.isoformat()}) has no "
                 "verified flashscore day-feed: only offsets "
-                f"{list(VERIFIED_DAY_OFFSETS)} were live-probed 2026-09-02 "
+                f"{list(VERIFIED_DAY_OFFSETS)} were live-probed "
                 "(f_<sport>_<offset>_3_en_2 -> HTTP 200) — re-probe before "
                 "shipping this range",
                 source=self.source,
