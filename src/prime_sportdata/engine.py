@@ -456,7 +456,22 @@ class Engine:
                 last_error = wrapped
                 continue
             breaker.record_success()
-            events = self._truncate(outcome.events, norm)
+            events = list(outcome.events)
+            warnings = list(outcome.warnings)
+            if (
+                sport == "football"
+                and category == "results"
+                and norm.get("date")
+                and source == "flashscore"
+                and events
+            ):
+                # flashscore day tables ship final scores only.  Livescore's
+                # date API carries half-time lines and postponed statuses, so
+                # a best-effort enrichment merge runs on every cache miss;
+                # failures degrade to the un-enriched primary list.
+                events, merge_warnings = self._enrich_football_results(norm, events)
+                warnings.extend(merge_warnings)
+            events = self._truncate(events, norm)
             quotes = self._truncate_quotes(outcome.quotes, norm)
             return self._envelope_for(
                 sport,
@@ -465,10 +480,40 @@ class Engine:
                 norm,
                 events,
                 quotes,
-                warnings=outcome.warnings,
+                warnings=warnings,
                 started=started,
             )
         raise FetchFailed(last_error, list(order), skipped_open)
+
+    def _enrich_football_results(
+        self,
+        norm: Mapping[str, str],
+        events: list[Event],
+    ) -> tuple[list[Event], list[str]]:
+        """Best-effort livescore enrichment for football day-table results."""
+        from prime_sportdata.sources.merge import merge_football_results
+
+        host = self._hosts.get("livescore", "livescore")
+        self._limiter.acquire(host)
+        adapter = self._adapters["livescore"]
+        try:
+            response = adapter.fetch("football", "results", {"date": norm["date"]})
+        except PrimeSportDataError as exc:
+            return events, [f"football results half-time enrichment skipped: {exc.detail}"]
+        except Exception as exc:  # noqa: BLE001 — enrichment must never kill the request
+            return events, [f"football results half-time enrichment skipped (untyped): {exc!r}"]
+        try:
+            outcome = adapter.parse_events(response)
+        except PrimeSportDataError as exc:
+            return events, [f"football results half-time enrichment skipped: {exc.detail}"]
+        except Exception as exc:  # noqa: BLE001 — enrichment must never kill the request
+            return events, [f"football results half-time enrichment skipped (untyped parse): {exc!r}"]
+        relevant = [
+            event
+            for event in outcome.events
+            if event.status in {"finished", "postponed", "cancelled"}
+        ]
+        return merge_football_results(events, relevant)
 
     def _envelope_for(
         self,

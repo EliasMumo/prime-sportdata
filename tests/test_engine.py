@@ -32,6 +32,7 @@ from prime_sportdata.models import (
     H2HPayload,
     OddsPayload,
     OddsQuote,
+    ScoreLine,
     Team,
 )
 from prime_sportdata.rate_limit import RateLimiter
@@ -197,6 +198,42 @@ def test_source_pinning_unknown_source_raises_bad_request(tmp_path: Path) -> Non
 
     with pytest.raises(BadRequest):
         engine.fetch_on_demand(*REQUEST, PARAMS, source="nope")
+
+
+def test_football_results_enrich_half_time_from_livescore(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    primary = make_event("Team A")
+    secondary = make_event("Team A")
+    secondary.status = "finished"
+    secondary.score_lines = [ScoreLine(period_label="H1", home=1, away=0)]
+    adapters["flashscore"].events = [primary]
+    adapters["livescore"].events = [secondary]
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+
+    env = engine.fetch_on_demand("football", "results", {"date": "2026-09-02", "limit": 50})
+
+    assert env.meta.source == "flashscore"
+    assert len(env.data.events) == 1
+    assert env.data.events[0].score_lines[0].period_label == "H1"
+    assert any("enriched" in warning for warning in env.meta.warnings)
+    # The merged envelope is cached: a second call answers without refetching.
+    engine.fetch_on_demand("football", "results", {"date": "2026-09-02", "limit": 50})
+    assert adapters["livescore"].fetch_calls == 1
+
+
+def test_football_results_enrichment_failure_degrades_gracefully(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    adapters["flashscore"].events = [make_event("Team A")]
+    adapters["livescore"].fetch_error = SourceBlocked("HTTP 403 WAF", source="livescore")
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+
+    env = engine.fetch_on_demand("football", "results", {"date": "2026-09-02", "limit": 50})
+
+    assert env.meta.source == "flashscore"
+    assert len(env.data.events) == 1
+    assert any("enrichment skipped" in warning for warning in env.meta.warnings)
 
 
 def test_all_down_raises_fetch_failed_with_last_code_and_tried(tmp_path: Path) -> None:

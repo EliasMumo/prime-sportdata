@@ -125,7 +125,7 @@ def test_fetch_403_raises_source_blocked(monkeypatch: pytest.MonkeyPatch) -> Non
     _install_fake_transport(monkeypatch, status=403)
     adapter = ls.LivescoreAdapter()
     with pytest.raises(SourceBlocked) as excinfo:
-        adapter.fetch("football", "fixtures", {})
+        adapter.fetch("football", "fixtures", {"date": "2026-09-16"})
     assert excinfo.value.source == "livescore"
     assert excinfo.value.detail.startswith("HTTP 403")
 
@@ -159,13 +159,11 @@ def test_map_challenge_html_200_to_source_blocked() -> None:
 
 
 def test_map_unexpected_status_raises_source_unavailable() -> None:
-    # 404 was never observed for this URL; nothing but the homepage was ever
-    # probed, so an unknown status is evidence of a changed network, not a
-    # data answer
+    # an unknown status is evidence of a changed network, not a data answer
     with pytest.raises(SourceUnavailable) as excinfo:
         ls._map_http_outcome(URL, 404, b"", FETCHED_AT, "livescore")
     assert excinfo.value.source == "livescore"
-    assert "re-probe" in excinfo.value.detail
+    assert "unexpected HTTP 404" in excinfo.value.detail
 
 
 def test_map_plain_200_passes_raw_response_parse_rejects_it() -> None:
@@ -177,10 +175,99 @@ def test_map_plain_200_passes_raw_response_parse_rejects_it() -> None:
     assert resp.source == "livescore"
 
 
-# --- parse_events: no contract exists, so no events can ever be returned ------
+# --- parse_events: date-API shape parses; anything else stays NoData --------
 
 
-def test_parse_events_raises_no_data_on_any_input(adapter: ls.LivescoreAdapter) -> None:
+DATE_URL = f"{ls.API_BASE}/soccer/20260916/1.50"
+
+
+def _date_payload() -> dict[str, Any]:
+    return {
+        "Stages": [
+            {
+                "Snm": "LaLiga",
+                "Events": [
+                    {
+                        "Eid": "1810664",
+                        "Esd": 20260916212000,
+                        "Eps": "FT",
+                        "Tr1": "7",
+                        "Tr2": "2",
+                        "Trh1": "4",
+                        "Trh2": "1",
+                        "T1": [{"Nm": "Barcelona", "ID": "2911"}],
+                        "T2": [{"Nm": "Racing Santander", "ID": "4508"}],
+                    },
+                    {
+                        "Eid": "1810665",
+                        "Esd": 20260916235000,
+                        "Eps": "Postp.",
+                        "T1": [{"Nm": "Levante", "ID": "1234"}],
+                        "T2": [{"Nm": "Athletic Club", "ID": "5678"}],
+                    },
+                    {
+                        "Eid": "1810666",
+                        "Esd": 20260916212000,
+                        "Eps": "XX",
+                        "T1": [{"Nm": "Unknown Status FC", "ID": "9"}],
+                        "T2": [{"Nm": "Skipped FC", "ID": "10"}],
+                    },
+                ],
+            }
+        ]
+    }
+
+
+def test_parse_events_parses_date_api_shape(adapter: ls.LivescoreAdapter) -> None:
+    resp = SourceResponse(
+        source="livescore", payload=_date_payload(), url=DATE_URL, status=200, fetched_at=FETCHED_AT
+    )
+    outcome = adapter.parse_events(resp)
+    assert len(outcome.events) == 2  # unknown status skipped with a warning
+    finished, postponed = outcome.events
+    assert finished.status == "finished"
+    assert finished.home.name == "Barcelona"
+    assert finished.home.score == 7
+    assert finished.away.score == 2
+    labels = {line.period_label: (line.home, line.away) for line in finished.score_lines}
+    assert labels["H1"] == (4, 1)
+    assert labels["FT"] == (7, 2)
+    assert finished.start_time_utc == "2026-09-16T21:20:00"  # Esd verbatim, naive
+    assert postponed.status == "postponed"
+    assert postponed.home.name == "Levante"
+    assert postponed.home.score is None
+    assert any("no timezone" in warning for warning in outcome.warnings)
+    assert any("skipped 1 event" in warning for warning in outcome.warnings)
+
+
+def test_fetch_fixtures_results_shape_date_api_url(adapter: ls.LivescoreAdapter, monkeypatch: pytest.MonkeyPatch) -> None:
+    requested: list[str] = []
+
+    class FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str) -> httpx.Response:
+            requested.append(url)
+            return httpx.Response(200, request=httpx.Request("GET", url), content=b"{}")
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+    adapter.fetch("football", "results", {"date": "2026-09-16"})
+    assert requested == [DATE_URL]
+
+
+def test_fetch_results_bad_date_raises_bad_request(adapter: ls.LivescoreAdapter) -> None:
+    with pytest.raises(BadRequest):
+        adapter.fetch("football", "results", {"date": "16/09/2026"})
+
+
+def test_parse_events_raises_no_data_on_any_non_date_input(adapter: ls.LivescoreAdapter) -> None:
     for payload in (
         b"<html>homepage</html>",
         b"{}",
@@ -193,7 +280,6 @@ def test_parse_events_raises_no_data_on_any_input(adapter: ls.LivescoreAdapter) 
             adapter.parse_events(resp)
         assert excinfo.value.source == "livescore"
         assert "no livescore parse contract exists" in excinfo.value.detail
-        assert "2026-09-02" in excinfo.value.detail
 
 
 # --- input validation (pre-network typed errors) ------------------------------

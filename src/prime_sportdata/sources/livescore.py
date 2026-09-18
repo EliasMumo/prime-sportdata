@@ -1,49 +1,25 @@
-"""Livescore adapter — graceful-blocked, probe-driven (2026-09-02).
+"""Livescore adapter — verified date API for fixtures/results (2026-09-18).
 
-See the "Livescore (Stage 4b, 2026-09-02)" section of
-``docs/source-health.md`` for the probe log. Honest summary:
-``www.livescore.com`` has never answered a single HTTP request from this
-network. The SPEC evidence row and this build's re-probe (2026-09-02, two
-sequential attempts) both ended in TCP connect timeouts — the second attempt
-forced IPv4 (``curl -4``) and still timed out — while sibling sports hosts
-answered normally. The edge blocks this client.
+``www.livescore.com`` has never answered a request from this network, but
+``prod-public-api.livescore.com`` does.  Probe (2026-09-18):
 
-Consequences for this adapter (SPEC: never fabricate, never parse unverified
+    GET https://prod-public-api.livescore.com/v1/api/app/date/soccer/20260916/1.50
+    -> HTTP 200, Stages[].Events[] with names (T1/T2[0].Nm), status (Eps:
+    NS scheduled, FT finished, HT half-time, Postp. postponed), full-time
+    scores (Tr1/Tr2), half-time scores (Trh1/Trh2) and a numeric start
+    timestamp (Esd, YYYYMMDDHHMMSS).  Same shape for basketball/tennis
+    slugs.
+
+Consequences for this adapter (never fabricate, never parse unverified
 shapes):
 
-* NO data path ships. The only URL ever requested is the site homepage
-  (``https://www.livescore.com/en/``), which is not a data endpoint, and no
-  livescore response was ever recorded — no content shape exists to parse, so
-  ``parse_events`` raises a typed error on any input.
-* ``fetch()`` is fully structured per the base contract and performs the real
-  request, so a future session whose network behaves differently is observed
-  and mapped instead of guessed: transport timeouts/refusals (the observed
-  reality this build) raise ``SourceUnavailable`` whose detail quotes the
-  probe evidence; HTTP 403 and bot-challenge pages raise ``SourceBlocked``;
-  HTTP 429 raises ``RateLimited``; HTTP 5xx (retries exhausted) raises
-  ``SourceUnavailable``. An unexpected HTTP 200 passes through as a raw
-  ``SourceResponse`` and ``parse_events`` then raises ``NoData`` — enabling a
-  livescore data path requires a fresh probe that records a real data
-  response AND a real parse contract first, never a guess from the homepage.
-* All 12 catalog cells behave identically (single probed URL): the observed
-  outcome is the same typed error regardless of sport/category, and query
-  params cannot shape a request to an endpoint that was never verified to
-  exist. Unknown sports/categories raise ``BadRequest`` before any request.
-* Retry discipline follows the SPEC cap (max 2 retries, exponential backoff
-  with jitter, ONLY on transport errors and HTTP 5xx — never on 403/429).
-  One static realistic browser UA, no rotation. Short connect timeout (8 s):
-  this host TCP-times-out, so longer waits would only burn the shared
-  residential IP budget.
-
-Type-mapping table (module-level ``_map_http_outcome``, unit-tested offline):
-
-    observed reality  transport timeout/refused -> SourceUnavailable
-    future behavior   HTTP 403 / challenge page -> SourceBlocked
-    future behavior   HTTP 429                  -> RateLimited
-    future behavior   HTTP 5xx (retries done)   -> SourceUnavailable
-    future behavior   HTTP 200 (non-challenge)  -> raw SourceResponse; parse
-                                                   raises NoData (no contract)
-    any other status                            -> SourceUnavailable
+* fixtures/results use the date endpoint above; the response carries both
+  scheduled and finished events (callers filter by status).
+* live/h2h still ship no data path (the only previously probed URL, the
+  homepage, remains TCP-blocked on this network) and surface the probe
+  evidence as a typed error.
+* ``Esd`` carries no timezone; it is emitted verbatim as a naive ISO
+  string and every parse attaches a standing warning.
 """
 
 from __future__ import annotations
@@ -52,7 +28,7 @@ import random
 import time
 from collections.abc import Mapping
 from datetime import UTC, datetime
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import httpx
 
@@ -63,7 +39,22 @@ from prime_sportdata.errors import (
     SourceBlocked,
     SourceUnavailable,
 )
-from prime_sportdata.sources.base import ParseOutcome, SourceAdapter, SourceResponse
+from prime_sportdata.models import (
+    Competition,
+    Event,
+    EventStatus,
+    ExternalRef,
+    ScoreLine,
+    Team,
+)
+from prime_sportdata.sources.base import (
+    ParseOutcome,
+    SourceAdapter,
+    SourceResponse,
+    parse_json_response,
+    parse_warning,
+    stamp_provenance,
+)
 
 # One static realistic browser UA per source (SPEC fingerprint hygiene).
 USER_AGENT = (
@@ -76,11 +67,14 @@ _HEADERS: dict[str, str] = {
     "Accept-Language": "en-US,en;q=0.9",
 }
 
-# The only URL ever requested for this source — the site homepage, probed in
-# the SPEC evidence session and re-probed this build. It is NOT a data
-# endpoint; it exists here only as the URL whose observed failure maps to the
-# typed error the adapter ships.
+# The only URL ever requested for the live/h2h cells — the site homepage,
+# probed in the SPEC evidence session and re-probed this build. It is NOT a
+# data endpoint.
 BASE_URL = "https://www.livescore.com/en/"
+
+# Verified 2026-09-18: date endpoint with full fixtures/results data.
+API_BASE = "https://prod-public-api.livescore.com/v1/api/app/date"
+API_VERSION = "1.50"
 
 CONNECT_TIMEOUT_S = 8.0
 MAX_RETRIES = 2
@@ -88,7 +82,23 @@ _BACKOFF_BASE_S = 1.5
 _JITTER_MAX_S = 0.8
 
 _SPORTS: tuple[str, ...] = ("football", "tennis", "basketball")
+_SPORT_SLUGS: dict[str, str] = {
+    "football": "soccer",
+    "tennis": "tennis",
+    "basketball": "basketball",
+}
 _CATEGORIES: tuple[str, ...] = ("fixtures", "live", "results", "h2h")
+
+# livescore Eps -> SPEC EventStatus (observed 2026-09-18). Unknown values are
+# skipped with a warning, never guessed.
+_STATUS_MAP: dict[str, EventStatus] = {
+    "NS": "scheduled",
+    "FT": "finished",
+    "HT": "live",
+    "Postp.": "postponed",
+    "AP": "postponed",
+    "CAN": "cancelled",
+}
 
 # Probe evidence quoted verbatim in typed-error details (2026-09-02; this
 # build's own re-probe plus the SPEC network table row).
@@ -134,11 +144,9 @@ def _map_http_outcome(
 ) -> SourceResponse:
     """Turn one final HTTP outcome into a response or a typed error.
 
-    Pure function of the observed response (tested offline). No livescore data
-    path exists, so no status here may produce data: 403/429/challenge map to
-    their typed errors, and everything else either raises ``SourceUnavailable``
-    or passes the raw body through for ``parse_events`` to reject with
-    ``NoData`` (no content shape was ever verified).
+    Pure function of the observed response (tested offline): 403/429/
+    challenge pages map to their typed errors; a 200 passes through as raw
+    bytes (date-API parsing happens in ``parse_events``).
     """
     if status == 403:
         raise SourceBlocked(f"HTTP 403 from {url}", source=source)
@@ -154,61 +162,158 @@ def _map_http_outcome(
         return SourceResponse(source=source, payload=body, url=url, status=200, fetched_at=fetched_at)
     if status >= 500:
         raise SourceUnavailable(f"HTTP {status} (retries exhausted) from {url}", source=source)
-    raise SourceUnavailable(
-        f"unexpected HTTP {status} from {url} — no livescore data path is "
-        "verified and this status was never observed (docs/source-health.md); "
-        "re-probe before enabling",
-        source=source,
-    )
+    raise SourceUnavailable(f"unexpected HTTP {status} from {url}", source=source)
 
 
 class LivescoreAdapter(SourceAdapter):
-    """Livescore adapter: graceful-blocked, structured per the base contract.
+    """Livescore adapter: date API for fixtures/results, homepage for the rest.
 
-    Implements ``fetch`` + ``parse_events`` but ships NO data path: no
-    livescore response was ever recorded on this network (2026-09-02 probe
-    evidence in the module docstring and docs/source-health.md), so there is
-    nothing verified to parse and no invented rows are ever returned. Every
-    valid (sport, category) cell performs the real request against the single
-    probed URL and surfaces the typed error the network actually produces
-    (this build: ``SourceUnavailable`` quoting the probe evidence).
+    ``fetch`` validates the (sport, category) cell and shapes the verified
+    date endpoint for fixtures/results; live/h2h keep the single previously
+    probed URL whose observed network outcome (this network: TCP timeouts)
+    surfaces as a typed error.
     """
 
     source: ClassVar[str] = "livescore"
 
     def fetch(self, sport: str, category: str, params: Mapping[str, str]) -> SourceResponse:
-        """Real HTTP request for ``sport/category``; typed errors only.
-
-        Validates inputs, then attempts the one URL that was ever probed. On
-        this network that attempt TCP-times-out and raises ``SourceUnavailable``
-        with the probe evidence in its detail. ``params`` (date/team/league/
-        limit) cannot shape a request to an endpoint that was never verified
-        to exist, so they are ignored — documented, not silent.
-        """
+        """Real HTTP request for ``sport/category``; typed errors only."""
         sport, category = str(sport), str(category)
         if sport not in _SPORTS:
             raise BadRequest(f"unknown sport {sport!r}", source=self.source)
         if category not in _CATEGORIES:
             raise BadRequest(f"unknown category {category!r}", source=self.source)
+        if category in {"fixtures", "results"}:
+            raw_date = (params.get("date") or "").strip()
+            try:
+                compact = datetime.strptime(raw_date, "%Y-%m-%d").strftime("%Y%m%d")  # noqa: DTZ007
+            except ValueError:
+                raise BadRequest(
+                    f"livescore date must be YYYY-MM-DD, got {raw_date!r}",
+                    source=self.source,
+                ) from None
+            return self._request(
+                f"{API_BASE}/{_SPORT_SLUGS[sport]}/{compact}/{API_VERSION}"
+            )
         return self._request(BASE_URL)
 
     def parse_events(self, resp: SourceResponse) -> ParseOutcome:
-        """No livescore content shape was ever verified — always typed error.
+        """Parse the verified date-API shape; anything else stays NoData."""
+        if "/date/" not in resp.url:
+            raise NoData(
+                "no livescore parse contract exists for this URL: only the "
+                f"verified date endpoint carries data; {resp.url} is not it",
+                source=resp.source,
+            ) from None
+        data = parse_json_response(resp)
+        stages = data.get("Stages") if isinstance(data, dict) else None
+        if not isinstance(stages, list):
+            raise NoData(
+                f"livescore payload lacks a Stages[] list (top-level keys: "
+                f"{sorted(data) if isinstance(data, dict) else type(data).__name__})",
+                source=resp.source,
+            )
+        warnings = [
+            parse_warning(
+                "livescore Esd carries no timezone; emitted verbatim as a "
+                "naive ISO timestamp (source offset unverified)",
+                resp,
+            )
+        ]
+        sport = "football"
+        try:
+            url_parts = resp.url.split("/")
+            slug = url_parts[url_parts.index("date") + 1]
+            sport = next(
+                (name for name, s in _SPORT_SLUGS.items() if s == slug), "football"
+            )
+        except (ValueError, IndexError):
+            sport = "football"
+        events: list[Event] = []
+        skipped: dict[str, int] = {}
+        for stage in stages:
+            if not isinstance(stage, dict):
+                skipped["stage entry is not an object"] = skipped.get("stage entry is not an object", 0) + 1
+                continue
+            stage_name = str(stage.get("Snm") or "")
+            for raw in stage.get("Events") or []:
+                if not isinstance(raw, dict):
+                    skipped["event entry is not an object"] = skipped.get("event entry is not an object", 0) + 1
+                    continue
+                event = self._normalize_event(raw, stage_name, sport)
+                if event is None:
+                    skipped["unknown status or missing team"] = skipped.get("unknown status or missing team", 0) + 1
+                    continue
+                events.append(event)
+        for reason, count in sorted(skipped.items()):
+            warnings.append(parse_warning(f"skipped {count} event(s): {reason}", resp))
+        return ParseOutcome(events=stamp_provenance(resp, events), warnings=warnings)
 
-        No livescore response was ever recorded on this network (every
-        2026-09-02 probe TCP-timed out), so parsing any payload into events
-        would require inventing a content contract. Raises ``NoData`` on any
-        input, never returns events.
-        """
-        raise NoData(
-            "no livescore parse contract exists: the only URL ever requested "
-            f"for this source ({resp.url}) is the site homepage, and no "
-            "livescore response was ever recorded on this network (2026-09-02: "
-            "TCP connect timeouts, docs/source-health.md); parsing any content "
-            "into events would be an invented shape. Re-probe and record a "
-            "real data response before any parse ships.",
-            source=resp.source,
-        ) from None
+    @staticmethod
+    def _normalize_event(raw: dict[str, object], stage_name: str, sport: Any) -> Event | None:
+        """One livescore event row -> Event; None for unsupported statuses."""
+        status = _STATUS_MAP.get(str(raw.get("Eps") or ""))
+        if status is None:
+            return None
+        home = LivescoreAdapter._team(raw.get("T1"))
+        away = LivescoreAdapter._team(raw.get("T2"))
+        if home is None or away is None:
+            return None
+        event_id = raw.get("Eid")
+        source_event_id = str(event_id) if event_id is not None else ""
+        if not source_event_id:
+            return None
+        home_score = LivescoreAdapter._score(raw.get("Tr1"))
+        away_score = LivescoreAdapter._score(raw.get("Tr2"))
+        half_home = LivescoreAdapter._score(raw.get("Trh1"))
+        half_away = LivescoreAdapter._score(raw.get("Trh2"))
+        score_lines: list[ScoreLine] = []
+        if half_home is not None or half_away is not None:
+            score_lines.append(ScoreLine(period_label="H1", home=half_home, away=half_away))
+        if home_score is not None or away_score is not None:
+            score_lines.append(ScoreLine(period_label="FT", home=home_score, away=away_score))
+        live = status == "live"
+        home_team = Team(name=home, score=home_score, current_score=live)
+        away_team = Team(name=away, score=away_score, current_score=live)
+        return Event(
+            sport=sport,
+            external=ExternalRef(source="livescore", source_event_id=source_event_id),
+            start_time_utc=LivescoreAdapter._start_time(raw.get("Esd")),
+            status=status,
+            home=home_team,
+            away=away_team,
+            score_lines=score_lines,
+            competition=Competition(name=stage_name) if stage_name else None,
+        )
+
+    @staticmethod
+    def _team(value: object) -> str | None:
+        if not isinstance(value, list) or not value or not isinstance(value[0], dict):
+            return None
+        name = value[0].get("Nm")
+        if not isinstance(name, str) or not name.strip():
+            return None
+        return name.strip()
+
+    @staticmethod
+    def _score(value: object) -> int | None:
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = int(str(value))
+        except (TypeError, ValueError):
+            return None
+        return parsed if parsed >= 0 else None
+
+    @staticmethod
+    def _start_time(value: object) -> str | None:
+        """Esd (YYYYMMDDHHMMSS int/str) -> naive ISO string, verbatim."""
+        raw = str(value or "").strip()
+        try:
+            parsed = datetime.strptime(raw, "%Y%m%d%H%M%S")  # noqa: DTZ007
+        except ValueError:
+            return None
+        return parsed.isoformat()
 
     def _request(self, url: str) -> SourceResponse:
         """GET ``url`` with retry discipline; returns or raises a typed error."""
@@ -239,6 +344,8 @@ class LivescoreAdapter(SourceAdapter):
 
 
 __all__ = [
+    "API_BASE",
+    "API_VERSION",
     "BASE_URL",
     "CONNECT_TIMEOUT_S",
     "MAX_RETRIES",
