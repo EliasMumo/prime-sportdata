@@ -91,7 +91,7 @@ def test_param_sets_per_row():
 def test_limits_default_50_max_200():
     for row in ROWS:
         assert row.limit_default == 50
-        assert row.limit_max == 200
+        assert row.limit_max == 500
 
 
 def test_missing_row_raises_key_error():

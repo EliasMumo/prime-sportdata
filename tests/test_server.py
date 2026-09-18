@@ -168,7 +168,7 @@ def test_catalog_lists_all_17_rows_with_params_and_curl(client: TestClient) -> N
     }
     for row in rows:
         assert row["params"] and row["sources"] and row["limit_default"] == 50
-        assert row["limit_max"] == 200
+        assert row["limit_max"] == 500
         assert row["example_curl"].startswith("curl -s 'http://127.0.0.1:8097/v1/")
     live = next(r for r in rows if r["category"] == "live")
     assert "date" not in live["params"]
@@ -230,7 +230,7 @@ def test_v1_unknown_sport_is_404_error_body(client: TestClient) -> None:
 
 
 def test_v1_bad_limit_is_400(client: TestClient) -> None:
-    over = client.get("/v1/football/live?limit=500")
+    over = client.get("/v1/football/live?limit=501")
     assert over.status_code == 400
     assert over.json()["error"]["code"] == "bad_request"
     nan = client.get("/v1/football/live?limit=abc")

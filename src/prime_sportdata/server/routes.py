@@ -164,7 +164,7 @@ def _parse_query(
             params["date"] = _today_iso()
         elif not _is_iso_date(raw_date):
             return None, _error(400, "bad_request", f"date must be YYYY-MM-DD, got {raw_date!r}")
-    # limit: default 50; must parse as 1..200 (SPEC: >200 -> 400).
+    # limit: default 50; must parse as 1..LIMIT_MAX (SPEC: >LIMIT_MAX -> 400).
     raw_limit = params.get("limit")
     if raw_limit is None:
         params["limit"] = str(LIMIT_DEFAULT)
