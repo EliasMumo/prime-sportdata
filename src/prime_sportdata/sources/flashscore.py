@@ -333,10 +333,14 @@ class FlashscoreAdapter(SourceAdapter):
         2026-09-15) may be requested; anything else is an honest
         ``NotFound`` with evidence — never an unverified feed guess.
         """
-        raw_date = str(params.get("date") or "").strip() if hasattr(params, "get") else ""
+        raw_date = (
+            params.date
+            if hasattr(params, "date")
+            else (params.get("date") if hasattr(params, "get") else None)
+        )
         if raw_date:
             try:
-                wanted = date.fromisoformat(raw_date)
+                wanted = date.fromisoformat(str(raw_date).strip())
             except ValueError:
                 raise BadRequest(
                     f"date must be YYYY-MM-DD, got {raw_date!r}", source=self.source

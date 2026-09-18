@@ -23,6 +23,7 @@ from prime_sportdata.errors import (
     SourceBlocked,
     SourceUnavailable,
 )
+from prime_sportdata.models import RequestParams
 from prime_sportdata.sources import flashscore as fs
 from prime_sportdata.sources.base import ParseOutcome, SourceResponse
 
@@ -379,6 +380,34 @@ def test_fetch_unverified_offsets_raise_not_found_with_evidence(
         assert "-7" in excinfo.value.detail  # verified range evidence quoted
     with pytest.raises(NotFound):
         adapter.fetch("football", "results", {"date": "2026-08-01"})
+
+
+def test_fetch_respects_request_params_model_date(adapter: fs.FlashscoreAdapter, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The engine passes RequestParams models, not dicts.
+
+    Regression: `_offset_for` used to only read ``params.get("date")``, so
+    model-shaped requests silently fell back to the default day and every
+    dated result request served the same (wrong) table.
+    """
+    monkeypatch.setattr(fs, "_prague_today", lambda: date(2026, 9, 18))
+    requested: list[str] = []
+
+    def fake_request(url: str) -> SourceResponse:
+        requested.append(url)
+        return SourceResponse(
+            source="flashscore", payload=b"SA\xc3\xb71\xc2\xac", url=url, status=200,
+            fetched_at=FETCHED_AT,
+        )
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    adapter.fetch("football", "results", RequestParams(date="2026-09-16"))
+    adapter.fetch("football", "results", RequestParams(date="2026-09-17"))
+    adapter.fetch("football", "results", RequestParams())
+    assert requested == [
+        "https://2.flashscore.ninja/2/x/feed/f_1_-2_3_en_2",
+        "https://2.flashscore.ninja/2/x/feed/f_1_-1_3_en_2",
+        "https://2.flashscore.ninja/2/x/feed/f_1_-1_3_en_2",
+    ]
 
 
 def test_fetch_malformed_date_raises_bad_request(
