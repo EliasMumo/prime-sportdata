@@ -33,6 +33,7 @@ from prime_sportdata.catalog import (
     LIMIT_DEFAULT,
     LIMIT_MAX,
     ROWS,
+    SOURCES,
     CatalogRow,
     get_row,
 )
@@ -188,10 +189,24 @@ def v1(request: Request, sport: str, category: str) -> JSONResponse:
     params, err = _parse_query(request, sport, category, row.params)
     if params is None:
         return err if err is not None else _error(400, "bad_request", "invalid query parameters")
+    # Optional single-source pinning (caller-trusted opt-in): answers the
+    # request from exactly one source instead of the catalog failover order.
+    # Used for targeted lookups (e.g. sofascore team-scoped results when the
+    # primary day table cannot help). Unknown keys like ``source`` are already
+    # dropped by ``_parse_query`` so adapters never see them.
+    source: str | None = request.query_params.get("source")
+    if source is not None:
+        source = source.strip()
+        if not source or source not in SOURCES:
+            return _error(
+                400,
+                "bad_request",
+                f"unknown source {source!r} (known sources: {', '.join(SOURCES)})",
+            )
     engine = _engine(request)
     try:
         envelope = engine.fetch_on_demand(
-            str(sport), str(category), params
+            str(sport), str(category), params, source=source
         )
     except FetchFailed as exc:
         # SPEC "Errors": 502 with the code of the LAST error + tried_sources.

@@ -174,6 +174,31 @@ def test_a_up_b_untouched(tmp_path: Path) -> None:
     assert engine.fetch_on_demand(*REQUEST, PARAMS).meta.source == "flashscore"
 
 
+def test_source_pinning_answers_only_that_source(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    adapters["flashscore"].events = [make_event("flashscore primary")]
+    adapters["sofascore"].events = [make_event("sofascore pinned")]
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    env = engine.fetch_on_demand("football", "results", {"team": "Levante"}, source="sofascore")
+    assert env.meta.source == "sofascore"
+    assert env.data.events[0].home.name == "sofascore pinned"
+    assert adapters["flashscore"].fetch_calls == 0
+    assert adapters["livescore"].fetch_calls == 0
+    # Pinned answers cache separately from the unpinned catalog order.
+    engine.fetch_on_demand("football", "results", {"team": "Levante"})
+    assert adapters["flashscore"].fetch_calls == 1
+
+
+def test_source_pinning_unknown_source_raises_bad_request(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    engine = build_engine(tmp_path, clock, sleeps, make_adapters())
+    from prime_sportdata.errors import BadRequest
+
+    with pytest.raises(BadRequest):
+        engine.fetch_on_demand(*REQUEST, PARAMS, source="nope")
+
+
 def test_all_down_raises_fetch_failed_with_last_code_and_tried(tmp_path: Path) -> None:
     clock, sleeps = FakeClock(), SleepRecorder()
     adapters = make_adapters()

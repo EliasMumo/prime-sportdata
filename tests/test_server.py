@@ -146,9 +146,29 @@ def test_health_reports_open_breaker_after_403(tmp_path: Path) -> None:
         assert health["breakers"]["flashscore"]["trips"] == 1
 
 
+def test_v1_source_pinning_hits_only_the_pinned_source(tmp_path: Path) -> None:
+    adapters = healthy_adapters()
+    engine = make_engine(tmp_path, adapters)
+    with TestClient(create_app(engine)) as client:
+        resp = client.get("/v1/football/results?team=Levante&source=sofascore")
+        assert resp.status_code == 200
+        assert resp.json()["meta"]["source"] == "sofascore"
+        assert adapters["flashscore"].fetch_calls == 0
+        assert adapters["livescore"].fetch_calls == 0
+        assert adapters["sofascore"].fetch_calls == 1
+
+
+def test_v1_unknown_source_pinning_is_400(tmp_path: Path) -> None:
+    adapters = healthy_adapters()
+    engine = make_engine(tmp_path, adapters)
+    with TestClient(create_app(engine)) as client:
+        resp = client.get("/v1/football/results?team=Levante&source=nope")
+        assert resp.status_code == 400
+        assert resp.json()["error"]["code"] == "bad_request"
+        assert adapters["sofascore"].fetch_calls == 0
+
+
 # --- /catalog -----------------------------------------------------------------
-
-
 def test_catalog_lists_all_17_rows_with_params_and_curl(client: TestClient) -> None:
     resp = client.get("/catalog")
     assert resp.status_code == 200

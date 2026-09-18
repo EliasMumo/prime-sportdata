@@ -81,6 +81,7 @@ from typing import Any, ClassVar, cast
 from prime_sportdata.cache import DiskCache
 from prime_sportdata.catalog import SOURCES, get_row, source_order
 from prime_sportdata.errors import (
+    BadRequest,
     NoData,
     NotFound,
     PrimeSportDataError,
@@ -358,16 +359,35 @@ class Engine:
 
     # -- public API ----------------------------------------------------------
 
-    def fetch_on_demand(self, sport: str, category: str, params: Mapping[str, Any]) -> Envelope:
-        """Cache -> rate limit -> breakers -> ordered failover -> Envelope."""
+    def fetch_on_demand(
+        self,
+        sport: str,
+        category: str,
+        params: Mapping[str, Any],
+        *,
+        source: str | None = None,
+    ) -> Envelope:
+        """Cache -> rate limit -> breakers -> ordered failover -> Envelope.
+
+        ``source`` pins the request to one source (validated against the
+        catalog); None keeps the catalog failover order.
+        """
         sport, category = str(sport), str(category)
         try:
             get_row(cast(Sport, sport), cast(Category, category))
         except KeyError:
             raise NotFound(f"unknown sport/category: {sport}/{category}") from None
-        order = source_order(cast(Sport, sport), cast(Category, category), self._order_override)
+        if source is not None:
+            source = source.strip()
+            if source not in SOURCES:
+                raise BadRequest(
+                    f"unknown source {source!r} (known sources: {', '.join(SOURCES)})"
+                )
+            order: Sequence[str] = (source,)
+        else:
+            order = source_order(cast(Sport, sport), cast(Category, category), self._order_override)
         norm = self._normalize_params(params)
-        key = self._cache_key(sport, category, norm)
+        key = self._cache_key(sport, category, norm, source)
         payload, fresh, _stored = self._cache.get(key)
         if fresh and isinstance(payload, dict):
             return self._envelope_from_cache(sport, category, payload)
@@ -536,9 +556,14 @@ class Engine:
         return list(quotes[:limit])
 
     @staticmethod
-    def _cache_key(sport: str, category: str, norm: Mapping[str, str]) -> str:
+    def _cache_key(sport: str, category: str, norm: Mapping[str, str], source: str | None = None) -> str:
         canonical = json.dumps(
-            {"sport": sport, "category": category, "params": sorted(norm.items())},
+            {
+                "sport": sport,
+                "category": category,
+                "source": source,
+                "params": sorted(norm.items()),
+            },
             sort_keys=True,
             separators=(",", ":"),
         )
