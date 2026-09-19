@@ -61,9 +61,12 @@ ODDS_PARAMS: tuple[str, ...] = ("date", "league", "limit")  # day-wide odds list
 ODDS_DETAILED_PARAMS: tuple[str, ...] = ("league", "limit")
 
 LIMIT_DEFAULT = 50
-# Flashscore day feeds hold 400+ events for football; a 200 cap silently
-# dropped later kickoffs (e.g. evening La Liga fixtures at positions 370+).
-LIMIT_MAX = 500
+# Flashscore day feeds are league-alphabetical and hold 1,700+ events on
+# busy football days; a 500 cap silently dropped every league from England
+# onward (2026-09-19: EPL/La Liga/etc. never reached the algo, so football
+# categories published nothing).  The day feed is bounded (~2k events), so
+# serve up to 5,000 rows and let callers consume the full slate.
+LIMIT_MAX = 5000
 
 _OVERRIDE_KEY = "{sport}.{category}"  # e.g. "football.fixtures"
 

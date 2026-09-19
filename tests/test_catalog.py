@@ -88,10 +88,10 @@ def test_param_sets_per_row():
             assert "date" not in params
 
 
-def test_limits_default_50_max_200():
+def test_limits_default_50_max_5000():
     for row in ROWS:
         assert row.limit_default == 50
-        assert row.limit_max == 500
+        assert row.limit_max == 5000
 
 
 def test_missing_row_raises_key_error():
