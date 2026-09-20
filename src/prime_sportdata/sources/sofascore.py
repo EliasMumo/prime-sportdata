@@ -109,7 +109,7 @@ _FOOTBALL = "football"
 _BASKETBALL = "basketball"
 _TENNIS = "tennis"
 _SPORTS = (_FOOTBALL, _BASKETBALL, _TENNIS)
-_CATEGORIES = ("fixtures", "live", "results", "h2h")
+_CATEGORIES = ("fixtures", "live", "results", "h2h", "lineups")
 
 # sofascore status.type -> SPEC EventStatus. Anything else: event skipped with
 # a warning (shape change must surface, never be guessed silently).
@@ -234,6 +234,8 @@ class SofascoreAdapter(SourceAdapter):
             raise BadRequest(f"unknown category {category!r}", source=self.source)
         if category == "h2h":
             raise self._h2h_unavailable()
+        if category == "lineups":
+            return self._fetch_lineups(sport, params)
         if category == "live":
             return self._request(self._live_url(sport))
         if sport == _TENNIS:
@@ -278,6 +280,96 @@ class SofascoreAdapter(SourceAdapter):
         for reason, count in sorted(skipped.items()):
             warnings.append(parse_warning(f"skipped {count} event(s): {reason}", resp))
         return ParseOutcome(events=stamp_provenance(resp, events), warnings=warnings)
+
+    # -- lineups ------------------------------------------------------------
+
+    def _fetch_lineups(self, sport: str, params: Mapping[str, str]) -> SourceResponse:
+        """Resolve two team names to their shared upcoming event, then fetch
+        its pre-match team sheets (``/event/{id}/lineups``, live-probed
+        2026-09-20).  Returns a combined SourceResponse carrying the two real
+        team-event pages, the selected raw event and the lineups document.
+        """
+        if sport != _FOOTBALL:
+            raise NotFound(
+                f"{sport} lineups have no verified endpoint on this sofascore "
+                f"API version — football only (probed 2026-09-20: "
+                f"/event/{{id}}/lineups answered HTTP 200 for football events).",
+                source=self.source,
+            )
+        team_a = (params.get("team_a") or "").strip()
+        team_b = (params.get("team_b") or "").strip()
+        if not team_a or not team_b:
+            raise BadRequest("football lineups requires team_a and team_b", source=self.source)
+        id_a = self._resolve_team(sport, team_a)
+        id_b = self._resolve_team(sport, team_b)
+        events_url = f"{BASE_WWW}/team/{{team_id}}/events/next/0"
+        resp_a = self._request(events_url.format(team_id=id_a))
+        resp_b = self._request(events_url.format(team_id=id_b))
+        page_a = parse_json_response(resp_a)
+        page_b = parse_json_response(resp_b)
+        list_a = page_a.get("events") if isinstance(page_a, dict) else None
+        list_b = page_b.get("events") if isinstance(page_b, dict) else None
+        if not isinstance(list_a, list) or not isinstance(list_b, list):
+            raise NoData("team event pages lack events[] lists", source=self.source)
+        shared = _shared_upcoming_event(list_a, list_b, id_a, id_b)
+        if shared is None:
+            raise NotFound(
+                f"no shared upcoming fixture found on sofascore for "
+                f"{team_a!r} ({id_a}) vs {team_b!r} ({id_b}): both next-event "
+                f"pages answered but carry no common event id",
+                source=self.source,
+            )
+        event_id = shared["id"]
+        lineups_url = f"{BASE_API}/event/{event_id}/lineups"
+        lineups_resp = self._request(lineups_url)
+        payload = parse_json_response(lineups_resp)
+        if not isinstance(payload, dict):
+            raise NoData(f"lineups endpoint answered non-object JSON at {lineups_url}", source=self.source)
+        return SourceResponse(
+            source=self.source,
+            payload={
+                "team_a_page": page_a,
+                "team_b_page": page_b,
+                "selected_event": shared,
+                "lineups": payload,
+            },
+            url=lineups_url,
+            status=lineups_resp.status,
+            fetched_at=lineups_resp.fetched_at,
+        )
+
+    def parse_lineups(self, resp: SourceResponse) -> ParseOutcome:
+        """Normalize a ``_fetch_lineups`` response into the event + sheets."""
+        data = parse_json_response(resp)
+        if not isinstance(data, dict):
+            raise NoData("lineups payload is not an object", source=resp.source)
+        raw_lineups = data.get("lineups")
+        if not isinstance(raw_lineups, dict) or "home" not in raw_lineups or "away" not in raw_lineups:
+            raise NoData(
+                f"lineups payload lacks home/away sheets (keys: {sorted(raw_lineups) if isinstance(raw_lineups, dict) else type(raw_lineups).__name__})",
+                source=resp.source,
+            )
+        raw_event = data.get("selected_event")
+        if not isinstance(raw_event, dict):
+            raise NoData("lineups payload lacks the selected event", source=resp.source)
+        warnings: list[str] = []
+        try:
+            event = self._normalize_event(raw_event)
+        except _SkipEvent as exc:
+            raise NoData(f"selected event cannot be normalized: {exc}", source=resp.source) from exc
+        if isinstance(raw_lineups.get("confirmed"), bool) and not raw_lineups["confirmed"]:
+            warnings.append(
+                parse_warning(
+                    "lineups are provisional (source confirmed=false) — "
+                    "treat as team-news hints, never confirmed sheets",
+                    resp,
+                )
+            )
+        return ParseOutcome(
+            events=stamp_provenance(resp, [event]),
+            lineups=_normalize_lineups_document(raw_lineups),
+            warnings=warnings,
+        )
 
     # -- verified endpoints -------------------------------------------------
 
@@ -539,6 +631,105 @@ class SofascoreAdapter(SourceAdapter):
 
 class _SkipEvent(Exception):
     """Internal: this raw event cannot be normalized honestly; skip + warn."""
+
+
+def _shared_upcoming_event(
+    list_a: list[Any],
+    list_b: list[Any],
+    id_a: int,
+    id_b: int,
+) -> dict[str, Any] | None:
+    """The earliest common fixture of the two team-event pages.
+
+    An event matches when one side carries ``id_a`` and the other ``id_b``
+    (home/away either way).  Only scheduled/live fixtures are considered —
+    a finished meeting is not a pre-match lineup target.  Ties prefer the
+    earlier start timestamp; equal timestamps keep page order.
+    """
+    upcoming_statuses = {"notstarted", "inprogress"}
+    by_id: dict[Any, dict[str, Any]] = {}
+    for page, other_id in ((list_a, id_b), (list_b, id_a)):
+        for raw in page:
+            if not isinstance(raw, dict):
+                continue
+            event_id = raw.get("id")
+            if not isinstance(event_id, int):
+                continue
+            status = raw.get("status")
+            if not isinstance(status, dict) or status.get("type") not in upcoming_statuses:
+                continue
+            home = raw.get("homeTeam")
+            away = raw.get("awayTeam")
+            if not isinstance(home, dict) or not isinstance(away, dict):
+                continue
+            side_ids = {home.get("id"), away.get("id")}
+            if id_a not in side_ids or other_id not in side_ids:
+                continue
+            if event_id not in by_id or _event_start(raw) < _event_start(by_id[event_id]):
+                by_id[event_id] = raw
+    if not by_id:
+        return None
+    return min(by_id.values(), key=_event_start)
+
+
+def _event_start(raw: dict[str, Any]) -> float:
+    stamp = raw.get("startTimestamp")
+    return float(stamp) if isinstance(stamp, (int, float)) else float("inf")
+
+
+def _normalize_lineups_document(raw: dict[str, Any]) -> dict[str, Any]:
+    """Normalize the raw ``/event/{id}/lineups`` document (probed 2026-09-20).
+
+    Keeps identity fields only: player name/position/jersey/substitute and
+    the source's missing-players list (injuries/suspensions).  Per-player
+    statistics and support staff are deliberately dropped.
+    """
+    confirmed = raw.get("confirmed") is True
+    return {
+        "confirmed": confirmed,
+        "home": _normalize_team_sheet(raw.get("home")),
+        "away": _normalize_team_sheet(raw.get("away")),
+    }
+
+
+def _normalize_team_sheet(side: Any) -> dict[str, Any]:
+    if not isinstance(side, dict):
+        return {"formation": None, "coach": None, "players": [], "missing_players": []}
+    formation = side.get("formation")
+    coach_raw = side.get("coach")
+    coach = None
+    if isinstance(coach_raw, dict) and isinstance(coach_raw.get("name"), str):
+        coach = coach_raw["name"]
+    players: list[dict[str, Any]] = []
+    for entry in side.get("players") or []:
+        if not isinstance(entry, dict):
+            continue
+        player = entry.get("player")
+        if not isinstance(player, dict) or not isinstance(player.get("name"), str):
+            continue
+        players.append(
+            {
+                "name": player["name"],
+                "position": player.get("position"),
+                "jersey_number": entry.get("jerseyNumber")
+                if isinstance(entry.get("jerseyNumber"), int)
+                else None,
+                "substitute": entry.get("substitute") is True,
+            }
+        )
+    missing: list[str] = []
+    for entry in side.get("missingPlayers") or []:
+        if not isinstance(entry, dict):
+            continue
+        player = entry.get("player")
+        if isinstance(player, dict) and isinstance(player.get("name"), str):
+            missing.append(player["name"])
+    return {
+        "formation": formation if isinstance(formation, str) else None,
+        "coach": coach,
+        "players": players,
+        "missing_players": missing,
+    }
 
 
 def _int_or_none(value: Any) -> int | None:

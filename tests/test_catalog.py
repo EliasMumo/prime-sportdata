@@ -1,4 +1,4 @@
-"""Catalog tests: 16 rows (odds 2026-09-08; odds_detailed Betika 2026-09-08)."""
+"""Catalog tests: 18 rows (odds 2026-09-08; odds_detailed Betika 2026-09-08; lineups 2026-09-20)."""
 
 import pytest
 
@@ -16,8 +16,8 @@ SPORTS: tuple[str, ...] = ("football", "basketball", "tennis")
 CATEGORIES: tuple[str, ...] = ("fixtures", "live", "results", "h2h", "odds")
 
 
-def test_exactly_seventeen_rows():
-    assert len(ROWS) == 17
+def test_exactly_eighteen_rows():
+    assert len(ROWS) == 18
 
 
 def test_covers_full_sport_x_category_matrix_once():
@@ -26,6 +26,7 @@ def test_covers_full_sport_x_category_matrix_once():
         {(s, c) for s in SPORTS for c in CATEGORIES}
         | {("football", "odds_detailed")}
         | {("football", "odds_linebet")}
+        | {("football", "lineups")}
     )
     assert pairs == expected
 
@@ -71,7 +72,14 @@ def test_default_source_order_matches_row():
 def test_param_sets_per_row():
     for row in ROWS:
         params = set(row.params)
-        assert "league" in params and "limit" in params
+        assert "limit" in params
+        if row.category == "lineups":
+            # resolved by two team names; no league/date filters exist on the
+            # verified lineups path
+            assert {"team_a", "team_b"} <= params
+            assert "date" not in params and "team" not in params and "league" not in params
+            continue
+        assert "league" in params
         if row.category in ("fixtures", "results"):
             assert {"date", "team"} <= params
         elif row.category == "live":
@@ -126,7 +134,7 @@ def test_catalog_module_importable_lookup():
         "betika",
         "linebet",
     )
-    assert len(catalog.ROWS) == 17
+    assert len(catalog.ROWS) == 18
 
 
 def test_football_h2h_linebet_first():

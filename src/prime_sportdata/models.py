@@ -11,7 +11,16 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 Sport = Literal["football", "basketball", "tennis"]
-Category = Literal["fixtures", "live", "results", "h2h", "odds", "odds_detailed", "odds_linebet"]
+Category = Literal[
+    "fixtures",
+    "live",
+    "results",
+    "h2h",
+    "odds",
+    "odds_detailed",
+    "odds_linebet",
+    "lineups",
+]
 EventStatus = Literal["scheduled", "live", "finished", "postponed", "cancelled", "interrupted"]
 
 
@@ -129,7 +138,50 @@ class OddsPayload(BaseModel):
     quotes: list[OddsQuote] = []
 
 
-EnvelopeData = EventsPayload | H2HPayload | OddsPayload
+class PlayerLineup(BaseModel):
+    """One player on a team sheet or the pre-match missing list.
+
+    Only identity fields the source exposes are normalized; per-player
+    statistics stay on the source page (out of scope for this category).
+    """
+
+    name: str
+    position: str | None = None  # source position code ("G"/"D"/"M"/"F")
+    jersey_number: int | None = None
+    substitute: bool = False
+
+
+class TeamLineup(BaseModel):
+    """One side of a pre-match lineup snapshot."""
+
+    formation: str | None = None
+    coach: str | None = None
+    players: list[PlayerLineup] = []
+    missing_players: list[str] = []  # injuries/suspensions the source lists
+
+
+class Lineups(BaseModel):
+    """Pre-match lineups for one fixture.
+
+    ``confirmed`` mirrors the source flag: false means the sheet is
+    provisional and must not be treated as team news.
+    """
+
+    confirmed: bool
+    home: TeamLineup
+    away: TeamLineup
+
+
+class LineupsPayload(BaseModel):
+    """Envelope data for lineups queries: the matched fixture + its sheets."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    event: Event
+    lineups: Lineups
+
+
+EnvelopeData = EventsPayload | H2HPayload | OddsPayload | LineupsPayload
 
 
 class RequestParams(BaseModel):
@@ -138,6 +190,9 @@ class RequestParams(BaseModel):
     date: str | None = None  # YYYY-MM-DD
     league: str | None = None
     limit: int | None = None
+    team_a: str | None = None  # lineups: first side
+    team_b: str | None = None  # lineups: second side
+    event_id: str | None = None  # lineups: direct source event id
 
 
 class Meta(BaseModel):

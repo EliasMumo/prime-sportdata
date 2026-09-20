@@ -169,11 +169,11 @@ def test_v1_unknown_source_pinning_is_400(tmp_path: Path) -> None:
 
 
 # --- /catalog -----------------------------------------------------------------
-def test_catalog_lists_all_17_rows_with_params_and_curl(client: TestClient) -> None:
+def test_catalog_lists_all_18_rows_with_params_and_curl(client: TestClient) -> None:
     resp = client.get("/catalog")
     assert resp.status_code == 200
     rows = resp.json()
-    assert len(rows) == 17
+    assert len(rows) == 18
     sports = {row["sport"] for row in rows}
     categories = {row["category"] for row in rows}
     assert sports == {"football", "basketball", "tennis"}
@@ -185,6 +185,7 @@ def test_catalog_lists_all_17_rows_with_params_and_curl(client: TestClient) -> N
         "odds",
         "odds_detailed",
         "odds_linebet",
+        "lineups",
     }
     for row in rows:
         assert row["params"] and row["sources"] and row["limit_default"] == 50
@@ -194,6 +195,8 @@ def test_catalog_lists_all_17_rows_with_params_and_curl(client: TestClient) -> N
     assert "date" not in live["params"]
     h2h = next(r for r in rows if r["category"] == "h2h")
     assert set(h2h["params"]) == {"entity_a", "entity_b", "league", "limit"}
+    lineups = next(r for r in rows if r["category"] == "lineups")
+    assert set(lineups["params"]) == {"team_a", "team_b", "limit"}
 
 
 # --- /v1 envelope paths --------------------------------------------------------
@@ -209,7 +212,14 @@ def test_v1_fixtures_returns_200_envelope(client: TestClient) -> None:
     assert meta["category"] == "fixtures"
     assert meta["source"] == "flashscore"
     assert meta["cached"] is False
-    assert meta["request"] == {"date": "2026-09-02", "league": "Premier League", "limit": 50}
+    assert meta["request"] == {
+        "date": "2026-09-02",
+        "league": "Premier League",
+        "limit": 50,
+        "team_a": None,
+        "team_b": None,
+        "event_id": None,
+    }
     assert meta["warnings"] == ["server-test warning"]
     assert meta["latency_ms"] >= 0
     assert meta["fetched_at_utc"]
@@ -236,6 +246,14 @@ def test_v1_h2h_requires_both_entities(client: TestClient) -> None:
     ok = client.get("/v1/football/h2h?entity_a=Arsenal&entity_b=Chelsea")
     assert ok.status_code == 200  # engine-level h2h envelope with both names
     assert ok.json()["data"]["home"]["name"] == "Arsenal"
+
+
+def test_v1_lineups_requires_both_teams(client: TestClient) -> None:
+    resp = client.get("/v1/football/lineups?team_a=Arsenal")
+    assert resp.status_code == 400
+    err = resp.json()["error"]
+    assert err["code"] == "bad_request"
+    assert "team_b" in err["detail"]
 
 
 def test_v1_unknown_sport_is_404_error_body(client: TestClient) -> None:

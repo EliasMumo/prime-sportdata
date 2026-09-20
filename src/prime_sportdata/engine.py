@@ -97,6 +97,8 @@ from prime_sportdata.models import (
     EventsPayload,
     H2HEntity,
     H2HPayload,
+    Lineups,
+    LineupsPayload,
     Meta,
     OddsPayload,
     OddsQuote,
@@ -435,6 +437,8 @@ class Engine:
                 try:
                     if category in ("odds", "odds_detailed", "odds_linebet"):
                         outcome: ParseOutcome = adapter.parse_odds(resp)
+                    elif category == "lineups":
+                        outcome = adapter.parse_lineups(resp)
                     else:
                         outcome = adapter.parse_events(resp)
                 except PrimeSportDataError as exc:
@@ -480,6 +484,7 @@ class Engine:
                 norm,
                 events,
                 quotes,
+                lineups=outcome.lineups,
                 warnings=warnings,
                 started=started,
             )
@@ -524,11 +529,12 @@ class Engine:
         events: Sequence[Event],
         quotes: Sequence[OddsQuote] = (),
         *,
+        lineups: dict[str, Any] | None = None,
         warnings: Sequence[str],
         started: float,
     ) -> Envelope:
         latency_ms = max(0, int((self._clock() - started) * 1000))
-        data = self._data_payload(category, norm, events, quotes)
+        data = self._data_payload(category, norm, events, quotes, lineups)
         limit: int | None = None
         raw_limit = norm.get("limit")
         if raw_limit is not None:
@@ -543,7 +549,14 @@ class Engine:
             cached=False,
             fetched_at_utc=self._now_iso(),
             latency_ms=latency_ms,
-            request=RequestParams(date=norm.get("date"), league=norm.get("league"), limit=limit),
+            request=RequestParams(
+                date=norm.get("date"),
+                league=norm.get("league"),
+                limit=limit,
+                team_a=norm.get("team_a"),
+                team_b=norm.get("team_b"),
+                event_id=norm.get("event_id"),
+            ),
             warnings=list(warnings),
         )
         return Envelope(data=data, meta=meta)
@@ -554,6 +567,7 @@ class Engine:
         norm: Mapping[str, str],
         events: Sequence[Event],
         quotes: Sequence[OddsQuote] = (),
+        lineups: dict[str, Any] | None = None,
     ) -> EnvelopeData:
         if category == "h2h":
             return H2HPayload(
@@ -563,6 +577,13 @@ class Engine:
             )
         if category in ("odds", "odds_detailed", "odds_linebet"):
             return OddsPayload(quotes=list(quotes))
+        if category == "lineups":
+            if not events or not lineups:
+                raise NoData(
+                    "lineups parse produced no event/sheets (source answered, "
+                    "content unusable)"
+                )
+            return LineupsPayload(event=events[0], lineups=Lineups.model_validate(lineups))
         return EventsPayload(events=list(events))
 
     def _envelope_from_cache(self, sport: str, category: str, payload: dict[str, Any]) -> Envelope:

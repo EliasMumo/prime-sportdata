@@ -1,4 +1,5 @@
-"""Sport x category catalog: 12 rows (3 sports x 4 categories), per-row query
+"""Sport x category catalog: 18 rows (odds 2026-09-08, odds_detailed Betika
+2026-09-08, odds_linebet 2026-09-09, lineups 2026-09-20), per-row query
 params and default source failover orders (SPEC "Failover order").
 
 Order rationale (documented so later stages can re-decide via override):
@@ -56,6 +57,7 @@ FIXTURES_RESULTS_PARAMS: tuple[str, ...] = ("date", "team", "league", "limit")
 LIVE_PARAMS: tuple[str, ...] = ("team", "league", "limit")  # live ignores date
 H2H_PARAMS: tuple[str, ...] = ("entity_a", "entity_b", "league", "limit")
 ODDS_PARAMS: tuple[str, ...] = ("date", "league", "limit")  # day-wide odds lists
+LINEUPS_PARAMS: tuple[str, ...] = ("team_a", "team_b", "limit")
 # Betika serves its own upcoming list; no verified date filter, so the
 # detailed category takes league/limit only (caller-side filtering warning).
 ODDS_DETAILED_PARAMS: tuple[str, ...] = ("league", "limit")
@@ -101,6 +103,10 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("tennis", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, ("betika", "linebet")),
     CatalogRow("football", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
+    # Pre-match team sheets (sofascore /event/{id}/lineups, live-probed
+    # 2026-09-20): resolved either by the caller's sofascore event_id or by
+    # two team names (search -> both next/0 pages -> shared upcoming event).
+    CatalogRow("football", "lineups", LINEUPS_PARAMS, ("sofascore",)),
 )
 
 

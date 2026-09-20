@@ -87,6 +87,10 @@ def _example_curl(row_sport: str, row_category: str, params: tuple[str, ...]) ->
         qs.append("entity_a=Team+A")
     if "entity_b" in params:
         qs.append("entity_b=Team+B")
+    if "team_a" in params:
+        qs.append("team_a=Arsenal")
+    if "team_b" in params:
+        qs.append("team_b=Chelsea")
     if "league" in params:
         qs.append("league=Premier+League")
     qs.append(f"limit={LIMIT_DEFAULT}")
@@ -133,7 +137,7 @@ def _parse_row(sport: str, category: str) -> tuple[CatalogRow | None, JSONRespon
             "not_found",
             f"unknown sport or category: /v1/{sport}/{category} "
             "(known sports: football, basketball, tennis; categories: "
-            "fixtures, live, results, h2h, odds, odds_detailed, odds_linebet)",
+            "fixtures, live, results, h2h, odds, odds_detailed, odds_linebet, lineups)",
         )
     return row, None
 
@@ -156,6 +160,14 @@ def _parse_query(
         if missing:
             return None, _error(
                 400, "bad_request", f"h2h requires both entities: {', '.join(missing)} missing"
+            )
+    # lineups: both team names are required (resolution is search -> shared
+    # upcoming event -> sheets; no verified name-free path).
+    if category == "lineups":
+        missing = [k for k in ("team_a", "team_b") if not params.get(k, "").strip()]
+        if missing:
+            return None, _error(
+                400, "bad_request", f"lineups requires both teams: {', '.join(missing)} missing"
             )
     # date: default today; must be YYYY-MM-DD when given (fixtures/results only;
     # live ignores date by construction — LIVE_PARAMS has no date key).

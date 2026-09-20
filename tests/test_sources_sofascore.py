@@ -392,3 +392,157 @@ def test_fetch_bad_sport_or_category_raises_bad_request(adapter: SofascoreAdapte
         adapter.fetch("handball", "live", {})
     with pytest.raises(BadRequest):
         adapter.fetch("football", "standings", {})
+
+
+# --- lineups (live-probed 2026-09-20; recorded fixtures above) ----------------
+
+
+def _lineups_source_response() -> SourceResponse:
+    return SourceResponse(
+        source="sofascore",
+        payload={
+            "team_a_page": json.loads((FIX / "football/lineups_team_next_a.json").read_text()),
+            "team_b_page": json.loads((FIX / "football/lineups_team_next_b.json").read_text()),
+            "selected_event": {
+                "id": 16363879,
+                "startTimestamp": 1791649800,
+                "status": {"type": "notstarted"},
+                "homeTeam": {"name": "Manchester United", "id": 33},
+                "awayTeam": {"name": "Tottenham Hotspur", "id": 40},
+                "homeScore": {},
+                "awayScore": {},
+                "tournament": {
+                    "uniqueTournament": {"name": "Premier League"},
+                    "category": {
+                        "sport": {"slug": "football"},
+                        "country": {"name": "England"},
+                    },
+                },
+            },
+            "lineups": json.loads((FIX / "football/lineups.json").read_text()),
+        },
+        url="https://api.sofascore.com/api/v1/event/16363879/lineups",
+        status=200,
+        fetched_at=FETCHED_AT,
+    )
+
+
+def test_parse_lineups_event_and_sheets(adapter: SofascoreAdapter) -> None:
+    outcome = adapter.parse_lineups(_lineups_source_response())
+    assert len(outcome.events) == 1
+    ev = outcome.events[0]
+    assert ev.home.name == "Manchester United"
+    assert ev.away.name == "Tottenham Hotspur"
+    assert ev.external.source == "sofascore"
+    assert ev.external.source_event_id == "16363879"
+    assert ev.competition is not None and ev.competition.name == "Premier League"
+    doc = outcome.lineups
+    assert doc is not None and doc["confirmed"] is False
+    home, away = doc["home"], doc["away"]
+    assert home["formation"] == "4-2-3-1"
+    assert home["coach"] == "Ruben Amorim"
+    assert home["players"] == [
+        {"name": "Andre Onana", "position": "G", "jersey_number": 24, "substitute": False},
+        {"name": "Antony", "position": "F", "jersey_number": 21, "substitute": True},
+    ]
+    assert home["missing_players"] == ["Mason Mount"]
+    assert away["formation"] == "4-3-3"
+    assert away["coach"] is None
+    assert away["players"][0]["name"] == "Guglielmo Vicario"
+    assert away["missing_players"] == []
+    assert any("provisional" in w for w in outcome.warnings)
+
+
+def test_parse_lineups_confirmed_document_has_no_provisional_warning(
+    adapter: SofascoreAdapter,
+) -> None:
+    raw = json.loads((FIX / "football/lineups.json").read_text())
+    raw["confirmed"] = True
+    resp = _lineups_source_response()
+    resp = SourceResponse(
+        source=resp.source,
+        payload={**resp.payload, "lineups": raw},  # type: ignore[arg-type]
+        url=resp.url,
+        status=resp.status,
+        fetched_at=resp.fetched_at,
+    )
+    outcome = adapter.parse_lineups(resp)
+    assert outcome.lineups is not None and outcome.lineups["confirmed"] is True
+    assert not any("provisional" in w for w in outcome.warnings)
+
+
+def test_parse_lineups_missing_sheets_raises_no_data(adapter: SofascoreAdapter) -> None:
+    resp = SourceResponse(
+        source="sofascore",
+        payload={"lineups": {"foo": 1}},
+        url="https://api.sofascore.com/api/v1/event/1/lineups",
+        status=200,
+        fetched_at=FETCHED_AT,
+    )
+    with pytest.raises(NoData):
+        adapter.parse_lineups(resp)
+
+
+def test_fetch_lineups_resolves_shared_event(
+    adapter: SofascoreAdapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two search hits + two team pages + the lineups call (no network)."""
+    search_a = {"results": [{"entity": {"id": 33, "name": "Manchester United", "type": 0, "sport": {"slug": "football"}}}]}
+    search_b = {"results": [{"entity": {"id": 40, "name": "Tottenham Hotspur", "type": 0, "sport": {"slug": "football"}}}]}
+    pages = {
+        "/team/33/events/next/0": (FIX / "football/lineups_team_next_a.json").read_text(),
+        "/team/40/events/next/0": (FIX / "football/lineups_team_next_b.json").read_text(),
+    }
+    lineups_bytes = (FIX / "football/lineups.json").read_text()
+    calls: list[str] = []
+
+    def fake_request(url: str) -> SourceResponse:
+        calls.append(url)
+        if "/search/all" in url:
+            payload = search_b if "Tottenham" in url else search_a
+        elif "/events/next/0" in url:
+            payload = pages[url.split("www.sofascore.com/api/v1")[1]]
+        else:
+            payload = lineups_bytes
+        return SourceResponse(
+            source="sofascore", payload=payload, url=url, status=200, fetched_at=FETCHED_AT
+        )
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    resp = adapter.fetch("football", "lineups", {"team_a": "Manchester United", "team_b": "Tottenham"})
+    assert resp.url == "https://api.sofascore.com/api/v1/event/16363879/lineups"
+    assert len(calls) == 5  # search x2 + team pages x2 + lineups
+    payload = resp.payload
+    assert isinstance(payload, dict)
+    assert payload["selected_event"]["id"] == 16363879
+
+
+def test_fetch_lineups_no_shared_event_raises_not_found(
+    adapter: SofascoreAdapter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    search_a = {"results": [{"entity": {"id": 33, "name": "Manchester United", "type": 0, "sport": {"slug": "football"}}}]}
+    search_b = {"results": [{"entity": {"id": 40, "name": "Tottenham Hotspur", "type": 0, "sport": {"slug": "football"}}}]}
+
+    def fake_request(url: str) -> SourceResponse:
+        if "/search/all" in url:
+            payload = search_b if "Tottenham" in url else search_a
+        else:
+            payload = {"events": []}  # both pages empty -> no shared fixture
+        return SourceResponse(
+            source="sofascore", payload=json.dumps(payload), url=url, status=200, fetched_at=FETCHED_AT
+        )
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    with pytest.raises(NotFound):
+        adapter.fetch("football", "lineups", {"team_a": "Manchester United", "team_b": "Tottenham"})
+
+
+def test_fetch_lineups_non_football_raises_not_found(adapter: SofascoreAdapter) -> None:
+    with pytest.raises(NotFound) as excinfo:
+        adapter.fetch("basketball", "lineups", {"team_a": "A", "team_b": "B"})
+    assert "football" in excinfo.value.detail
+
+
+def test_fetch_lineups_missing_teams_raises_bad_request(adapter: SofascoreAdapter) -> None:
+    with pytest.raises(BadRequest):
+        adapter.fetch("football", "lineups", {"team_a": "Only One"})

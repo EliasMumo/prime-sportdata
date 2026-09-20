@@ -45,6 +45,7 @@ class ParseOutcome:
 
     events: list[Event] = field(default_factory=list)
     quotes: list[OddsQuote] = field(default_factory=list)
+    lineups: dict[str, Any] | None = None  # set only by parse_lineups
     warnings: list[str] = field(default_factory=list)
 
 
@@ -82,6 +83,18 @@ class SourceAdapter(ABC):
         """
         raise NoData(
             f"source {self.source} has no verified odds data path",
+            source=resp.source,
+        )
+
+    def parse_lineups(self, resp: SourceResponse) -> ParseOutcome:
+        """Turn one fetched ``SourceResponse`` into a normalized lineups
+        payload (``outcome.lineups``) plus the matched fixture event.
+
+        The default raises ``NoData``: an adapter only supports this method
+        when it ships a live-verified lineups data path.
+        """
+        raise NoData(
+            f"source {self.source} has no verified lineups data path",
             source=resp.source,
         )
 
