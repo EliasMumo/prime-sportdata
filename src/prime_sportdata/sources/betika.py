@@ -99,7 +99,11 @@ _JITTER_MAX_S = 0.8
 # safe daily bound; the engine rate limiter keeps them >= 1 s apart.  The
 # list page size is 100 because the upcoming feed mixes many sports and
 # virtual football; only ``sport_name == "Soccer"`` rows are real matches.
-MAX_DETAIL_REQUESTS = 24
+# Bounded per-fetch detail budget.  Raised 24 -> 36 on 2026-09-21
+# (owner-directed league expansion): more fixtures get complete HTFT /
+# correct-score grids before minor leagues consume the budget, while the
+# budget still bounds the ban-risk surface.
+MAX_DETAIL_REQUESTS = 36
 LIST_PAGE_SIZE = 500
 # Pagination is bounded for ban-risk discipline.  The verified list endpoint
 # serves the requested page size (``limit=500`` live-verified 2026-09-09) and
@@ -174,6 +178,7 @@ _PRIORITY_LEAGUES = frozenset(
         ("laliga", "spain"),
         ("primera division", "spain"),
         ("serie a", "italy"),
+        ("serie a", "brazil"),
         ("bundesliga", "germany"),
         ("ligue 1", "france"),
         ("eredivisie", "netherlands"),
@@ -181,6 +186,21 @@ _PRIORITY_LEAGUES = frozenset(
         ("uefa champions league", "international clubs"),
         ("uefa europa league", "international clubs"),
         ("uefa conference league", "international clubs"),
+        # Expanded coverage (owner-directed 2026-09-21): additional well-
+        # covered top-flight leagues get the bounded detail budget before
+        # minor leagues, so complete HTFT/correct-score grids survive busy
+        # morning slates.  Detail completeness thresholds are unchanged.
+        ("primeira liga", "portugal"),
+        ("major league soccer", "usa"),
+        ("super lig", "turkey"),
+        ("premiership", "scotland"),
+        ("liga mx", "mexico"),
+        ("jupiler pro league", "belgium"),
+        ("first division a", "belgium"),
+        ("superliga", "denmark"),
+        ("eliteserien", "norway"),
+        ("allsvenskan", "sweden"),
+        ("saudi pro league", "saudi arabia"),
     }
 )
 

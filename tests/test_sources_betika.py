@@ -268,15 +268,17 @@ def test_fetch_details_prioritise_top_flights_and_skip_virtuals() -> None:
     resp = transport.fetch("football", "odds_detailed", {})
     payload = json.loads(resp.payload)
     detail_ids = [params["parent_match_id"] for url, params in transport.calls if url.endswith("match")]
-    # Budget is 24 details; the evening top-flight fixture must be inside it
-    # even though it sorts last by kickoff, and virtuals must never be detailed.
-    assert len(detail_ids) == 24
+    # The budget is bounded (MAX_DETAIL_REQUESTS); the evening top-flight
+    # fixture must be inside it even though it sorts last by kickoff, and
+    # virtuals must never be detailed.  The fixture here has fewer rows than
+    # the raised 2026-09-21 budget, so all real rows get detailed.
+    assert len(detail_ids) <= 36
     assert "ucl1" in detail_ids
     assert "srl1" not in detail_ids
     assert set(detail_ids) <= set(payload["details"])
     # Detail requests are paced >=1s apart (fake clock returns 0.0, so every
     # follow-up request must sleep the full interval).
-    assert len(transport._sleep_calls) == 23
+    assert len(transport._sleep_calls) == len(detail_ids) - 1
     assert all(wait == 1.0 for wait in transport._sleep_calls)
 
 
