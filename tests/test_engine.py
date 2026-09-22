@@ -85,6 +85,7 @@ class FakeAdapter(SourceAdapter):
         self.fetch_error: PrimeSportDataError | None = None
         self.parse_error: PrimeSportDataError | None = None
         self.events: list[Event] = []
+        self.quotes: list[OddsQuote] = []
         self.warnings: list[str] = []
 
     def fetch(self, sport: str, category: str, params: Mapping[str, str]) -> SourceResponse:
@@ -104,6 +105,12 @@ class FakeAdapter(SourceAdapter):
         if self.parse_error is not None:
             raise self.parse_error
         return ParseOutcome(events=list(self.events), warnings=list(self.warnings))
+
+    def parse_odds(self, resp: SourceResponse) -> ParseOutcome:
+        self.parse_calls += 1
+        if self.parse_error is not None:
+            raise self.parse_error
+        return ParseOutcome(quotes=list(self.quotes), warnings=list(self.warnings))
 
 
 def make_event(name: str = "Team A") -> Event:
@@ -351,6 +358,55 @@ def test_cache_success_only(tmp_path: Path) -> None:
         with pytest.raises(FetchFailed):
             engine.fetch_on_demand(*REQUEST, PARAMS)
     assert adapters["flashscore"].fetch_calls == 2  # failed answers are never cached
+
+
+def test_empty_odds_cached_only_briefly(tmp_path: Path) -> None:
+    """Rollover/cold-start empties must not poison the odds cache.
+
+    An empty 200 for an odds category is cached for the short
+    ``ttl_empty_odds_seconds`` bucket (60s), never the full odds TTL (600s),
+    so a caller retrying on the publish retry cadence reaches the live
+    source instead of replaying emptiness for 10+ minutes.
+    """
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    params = {"date": "2026-09-02", "limit": 50}
+    first = engine.fetch_on_demand("football", "odds", params)
+    assert first.data.quotes == []
+    assert adapters["betexplorer"].fetch_calls == 1  # football/odds primary
+    clock.advance(59.0)
+    second = engine.fetch_on_demand("football", "odds", params)
+    assert second.meta.cached is True
+    assert adapters["betexplorer"].fetch_calls == 1
+    clock.advance(2.0)
+    third = engine.fetch_on_demand("football", "odds", params)
+    assert third.meta.cached is False
+    assert adapters["betexplorer"].fetch_calls == 2  # live scrape retried
+
+
+def test_nonempty_odds_keep_full_ttl(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    quote = OddsQuote(
+        sport="football",
+        external=ExternalRef(source="betexplorer", source_event_id="evt-1"),
+        start_time_utc=None,
+        home="Team A",
+        away="Team B",
+        market="1x2",
+        bookmaker="betexplorer-default",
+        prices={"1": 1.8, "X": 3.4, "2": 4.2},
+    )
+    adapters["betexplorer"].quotes = [quote]
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    params = {"date": "2026-09-02", "limit": 50}
+    engine.fetch_on_demand("football", "odds", params)
+    clock.advance(599.0)
+    assert engine.fetch_on_demand("football", "odds", params).meta.cached is True
+    clock.advance(2.0)
+    assert engine.fetch_on_demand("football", "odds", params).meta.cached is False
+    assert adapters["betexplorer"].fetch_calls == 2
 
 
 # --- rate limiting -------------------------------------------------------------

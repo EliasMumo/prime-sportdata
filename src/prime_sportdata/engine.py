@@ -327,6 +327,7 @@ class Engine:
         ttl_live_seconds: float = 30.0,
         ttl_default_seconds: float = 1800.0,
         ttl_odds_seconds: float = 600.0,
+        ttl_empty_odds_seconds: float = 60.0,
         breaker_enabled: bool = True,
         breaker_cooldown_seconds: float = 1800.0,
         breaker_cooldown_max_seconds: float = 14400.0,
@@ -345,6 +346,7 @@ class Engine:
         self._ttl_live = ttl_live_seconds
         self._ttl_default = ttl_default_seconds
         self._ttl_odds = ttl_odds_seconds
+        self._ttl_empty_odds = ttl_empty_odds_seconds
         self._breaker_enabled = breaker_enabled
         self._clock = clock
         self._now_iso = now_iso
@@ -396,10 +398,20 @@ class Engine:
         envelope = self._fetch_uncached(sport, category, norm, order)
         if category == "live":
             ttl = self._ttl_live
-        elif category in ("odds", "odds_detailed"):
+        elif category in ("odds", "odds_detailed", "odds_linebet"):
             ttl = self._ttl_odds
         else:
             ttl = self._ttl_default
+        if (
+            category in ("odds", "odds_detailed", "odds_linebet")
+            # An empty odds answer is a source-rollover / cold-start symptom,
+            # not a healthy empty day.  Caching it for the full odds TTL
+            # replays emptiness to every caller (the daily publish retries
+            # included) for 10+ minutes.  Cache empties only very briefly so
+            # the next request retries the live scrape.
+            and not getattr(envelope.data, "quotes", None)
+        ):
+            ttl = self._ttl_empty_odds
         self._cache.set(key, envelope.model_dump(mode="json"), ttl)
         return envelope
 
