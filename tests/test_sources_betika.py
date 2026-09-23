@@ -271,8 +271,8 @@ def test_fetch_details_prioritise_top_flights_and_skip_virtuals() -> None:
     # The budget is bounded (MAX_DETAIL_REQUESTS); the evening top-flight
     # fixture must be inside it even though it sorts last by kickoff, and
     # virtuals must never be detailed.  The fixture here has fewer rows than
-    # the raised 2026-09-21 budget, so all real rows get detailed.
-    assert len(detail_ids) <= 36
+    # the raised 2026-09-23 budget, so all real rows get detailed.
+    assert len(detail_ids) <= 48
     assert "ucl1" in detail_ids
     assert "srl1" not in detail_ids
     assert set(detail_ids) <= set(payload["details"])

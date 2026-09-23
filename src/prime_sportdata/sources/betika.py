@@ -100,10 +100,13 @@ _JITTER_MAX_S = 0.8
 # list page size is 100 because the upcoming feed mixes many sports and
 # virtual football; only ``sport_name == "Soccer"`` rows are real matches.
 # Bounded per-fetch detail budget.  Raised 24 -> 36 on 2026-09-21
-# (owner-directed league expansion): more fixtures get complete HTFT /
-# correct-score grids before minor leagues consume the budget, while the
-# budget still bounds the ban-risk surface.
-MAX_DETAIL_REQUESTS = 36
+# (owner-directed league expansion) and 36 -> 48 on 2026-09-23: the fitted
+# model now consumes reserve/regional leagues (Argentine reserves, Israeli
+# Liga Alef, Brazilian regional, England's National League Cup) whose rows
+# arrive early in the kickoff-ordered list, and the owner wants their
+# complete HTFT / correct-score / double-chance grids priced.  The budget
+# still bounds the ban-risk surface.
+MAX_DETAIL_REQUESTS = 48
 LIST_PAGE_SIZE = 500
 # Pagination is bounded for ban-risk discipline.  The verified list endpoint
 # serves the requested page size (``limit=500`` live-verified 2026-09-09) and
@@ -201,6 +204,18 @@ _PRIORITY_LEAGUES = frozenset(
         ("eliteserien", "norway"),
         ("allsvenskan", "sweden"),
         ("saudi pro league", "saudi arabia"),
+        # Reserve/regional coverage (owner-directed 2026-09-23): the fitted
+        # football model consumes these leagues (observed as model-backed
+        # rows in the shadow ledger), so their rows get the bounded detail
+        # budget instead of only list-level 1X2 quotes.  Pairs are Betika's
+        # own (competition_name, category) labels, live-verified.
+        ("primera lpf, reserves", "argentina"),
+        ("primera division, reserves", "el salvador"),
+        ("liga alef", "israel"),
+        ("national league", "israel"),
+        ("gaucho, serie a2", "brazil"),
+        ("national league cup", "england"),
+        ("emperor cup", "japan"),
     }
 )
 
