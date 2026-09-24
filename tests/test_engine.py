@@ -77,7 +77,10 @@ class FakeAdapter(SourceAdapter):
     source: ClassVar[str] = "fake"
 
     def __init__(self, name: str) -> None:
-        if name not in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet"):
+        if name not in (
+            "flashscore", "sofascore", "livescore", "betexplorer",
+            "betika", "linebet", "betwinner", "1xbet_ke",
+        ):
             raise ValueError(f"fake adapter must use a catalog source name, got {name!r}")
         self._name = name
         self.fetch_calls = 0
@@ -147,7 +150,10 @@ def build_engine(
 def make_adapters() -> dict[str, FakeAdapter]:
     return {
         name: FakeAdapter(name)
-        for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet")
+        for name in (
+            "flashscore", "sofascore", "livescore", "betexplorer",
+            "betika", "linebet", "betwinner", "1xbet_ke",
+        )
     }
 
 

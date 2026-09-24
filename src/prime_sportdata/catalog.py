@@ -28,6 +28,8 @@ SOURCES: tuple[str, ...] = (
     "betexplorer",
     "betika",
     "linebet",
+    "betwinner",
+    "1xbet_ke",
 )
 
 # Canonical orders (SPEC failover table; both start with the best first).
@@ -98,11 +100,14 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("tennis", "live", LIVE_PARAMS, SOFASCORE_FIRST),
     CatalogRow("tennis", "results", FIXTURES_RESULTS_PARAMS, SOFASCORE_FIRST),
     CatalogRow("tennis", "h2h", H2H_PARAMS, SOFASCORE_FIRST),
-    CatalogRow("football", "odds", ODDS_PARAMS, ("betexplorer", "linebet")),
+    CatalogRow("football", "odds", ODDS_PARAMS, ("betexplorer", "linebet", "betwinner", "1xbet_ke")),
     CatalogRow("basketball", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("tennis", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, ("betika", "linebet")),
     CatalogRow("football", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
+    # 1xBet-family siblings with explicit rows (probe-verified 2026-09-24).
+    CatalogRow("football", "odds_betwinner", ODDS_DETAILED_PARAMS, ("betwinner",)),
+    CatalogRow("football", "odds_1xbet_ke", ODDS_DETAILED_PARAMS, ("1xbet_ke",)),
     # Pre-match team sheets (sofascore /event/{id}/lineups, live-probed
     # 2026-09-20): resolved either by the caller's sofascore event_id or by
     # two team names (search -> both next/0 pages -> shared upcoming event).

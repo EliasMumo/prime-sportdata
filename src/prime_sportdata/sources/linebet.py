@@ -125,6 +125,9 @@ _H2H_CATEGORY = "h2h"
 _ODDS_CATEGORY = "odds"
 # Explicit linebet-only catalog row; behaves exactly like the odds category.
 _ODDS_LINEBET_CATEGORY = "odds_linebet"
+# Family siblings ship their own explicit rows (probe-verified 2026-09-24).
+_ODDS_BETWINNER_CATEGORY = "odds_betwinner"
+_ODDS_1XBET_KE_CATEGORY = "odds_1xbet_ke"
 
 # 1xBet-style group ids used to decode the verified market groups.
 _GROUP_DOUBLE_CHANCE = 8
@@ -253,9 +256,33 @@ def _btts_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
 
 
 class LinebetAdapter(SourceAdapter):
-    """Linebet odds + head-to-head adapter (football, JSON API)."""
+    """1xBet-family odds + head-to-head adapter (football, JSON API).
+
+    Linebet is the verified original member of the family; BetWinner and
+    1xBet KE are sibling adapters over the same public ``LineFeed`` schema
+    (probe-verified 2026-09-24: list, detail, and list-with-params answers).
+    """
 
     source: ClassVar[str] = "linebet"
+    base_url: ClassVar[str] = BASE_URL
+    referer: ClassVar[str] = "https://linebet.com/en/line/football"
+    # h2h is verified only for linebet; siblings serve odds categories only.
+    supports_h2h: ClassVar[bool] = True
+    list_params: ClassVar[dict[str, str]] = {
+        "sports": "1",
+        "count": str(LIST_PAGE_SIZE),
+        "lng": "en",
+        "tf": "2200000",
+        "tz": "3",
+        "mode": "4",
+        "country": "87",
+        "partner": "189",
+        "getEmpty": "true",
+    }
+    # Categories whose list fetch is followed by the bounded detail phase.
+    slate_categories: ClassVar[frozenset[str]] = frozenset(
+        {_ODDS_CATEGORY, _ODDS_LINEBET_CATEGORY}
+    )
 
     def __init__(
         self,
@@ -278,10 +305,10 @@ class LinebetAdapter(SourceAdapter):
                 f"linebet ships football-only paths; no verified {sport!r} path",
                 source=self.source,
             )
-        if category not in {_H2H_CATEGORY, _ODDS_CATEGORY, _ODDS_LINEBET_CATEGORY}:
+        if category not in {_H2H_CATEGORY} | set(self.slate_categories):
             raise NotFound(
-                f"linebet ships h2h and odds categories only; no verified "
-                f"{category!r} endpoint",
+                f"{self.source} ships {'h2h and ' if self.supports_h2h else ''}"
+                f"odds categories only; no verified {category!r} endpoint",
                 source=self.source,
             )
         if (params.get("date") or "").strip():
@@ -293,27 +320,22 @@ class LinebetAdapter(SourceAdapter):
                 source=self.source,
             )
         list_resp = self._request(
-            f"{BASE_URL}{_LIST_PATH}",
-            params={
-                "sports": "1",
-                "count": str(LIST_PAGE_SIZE),
-                "lng": "en",
-                "tf": "2200000",
-                "tz": "3",
-                "mode": "4",
-                "country": "87",
-                "partner": "189",
-                "getEmpty": "true",
-            },
+            f"{self.base_url}{_LIST_PATH}",
+            params=self.list_params,
         )
         try:
             list_payload = list_resp.json()
         except ValueError as exc:
-            raise NoData(f"linebet matches payload is not JSON: {exc}", source=self.source) from exc
+            raise NoData(f"{self.source} matches payload is not JSON: {exc}", source=self.source) from exc
         events = list_payload.get("Value") if isinstance(list_payload, dict) else None
         if not isinstance(events, list) or not events:
-            raise NoData("linebet matches payload lacks Value[]", source=self.source)
-        if category in {_ODDS_CATEGORY, _ODDS_LINEBET_CATEGORY}:
+            raise NoData(f"{self.source} matches payload lacks Value[]", source=self.source)
+        if category == _H2H_CATEGORY and not self.supports_h2h:
+            raise NotFound(
+                f"{self.source} h2h is unverified; odds categories only",
+                source=self.source,
+            )
+        if category in self.slate_categories:
             details: dict[str, Any] = {}
             detail_skipped: list[str] = []
             detail_started = self._clock()
@@ -340,7 +362,7 @@ class LinebetAdapter(SourceAdapter):
             return SourceResponse(
                 source=self.source,
                 payload=json.dumps(assembled),
-                url=f"{BASE_URL}{_LIST_PATH}",
+                url=f"{self.base_url}{_LIST_PATH}",
                 status=200,
                 fetched_at=_utc_now_iso(),
             )
@@ -365,7 +387,7 @@ class LinebetAdapter(SourceAdapter):
             # hold full h2h databases and can still serve historical pairs.
             # NotFound keeps the engine failover moving.
             raise NotFound(
-                f"no upcoming linebet fixture between {params.get('entity_a')} "
+                f"no upcoming {self.source} fixture between {params.get('entity_a')} "
                 f"and {params.get('entity_b')}; failover for historical pairs",
                 source=self.source,
             )
@@ -373,7 +395,7 @@ class LinebetAdapter(SourceAdapter):
         if isinstance(stat_id, bool) or not isinstance(stat_id, (int, float, str)):
             raise NoData("matched linebet match lacks a statistics game id", source=self.source)
         h2h_resp = self._request(
-            f"{BASE_URL}{_H2H_PATH}",
+            f"{self.base_url}{_H2H_PATH}",
             params={
                 "id": str(stat_id),
                 "lng": "en",
@@ -395,7 +417,7 @@ class LinebetAdapter(SourceAdapter):
         return SourceResponse(
             source=self.source,
             payload=json.dumps(assembled),
-            url=f"{BASE_URL}{_H2H_PATH}",
+            url=f"{self.base_url}{_H2H_PATH}",
             status=200,
             fetched_at=_utc_now_iso(),
         )
@@ -465,7 +487,7 @@ class LinebetAdapter(SourceAdapter):
             external = ExternalRef(
                 source=self.source,
                 source_event_id=str(source_id) if source_id is not None else "",
-                source_url=f"{BASE_URL}/en/line/football",
+                source_url=f"{self.base_url}/en/line/football",
             )
             if not external.source_event_id:
                 continue
@@ -505,25 +527,25 @@ class LinebetAdapter(SourceAdapter):
         skipped = payload.get("detail_skipped")
         warnings = [
             parse_warning(
-                "linebet odds are observed bookmaker market evidence; not an "
-                "approved execution bookmaker by default",
+                f"{resp.source} odds are observed bookmaker market evidence; "
+                "not an approved execution bookmaker by default",
                 resp,
             ),
             parse_warning(
-                "linebet kickoff timestamps are unix seconds; parsed as UTC",
+                f"{resp.source} kickoff timestamps are unix seconds; parsed as UTC",
                 resp,
             ),
             parse_warning(
-                "linebet HT/FT group (11412) is present but its outcome encoding "
-                "was not unambiguously decodable; it is not shipped",
+                f"{resp.source} HT/FT group (11412) is present but its outcome "
+                "encoding was not unambiguously decodable; it is not shipped",
                 resp,
             ),
         ]
         if isinstance(skipped, list) and skipped:
             warnings.append(
                 parse_warning(
-                    f"linebet detail requests skipped for {len(skipped)} game(s): "
-                    f"{', '.join(str(item) for item in skipped[:5])}",
+                    f"{resp.source} detail requests skipped for {len(skipped)} "
+                    f"game(s): {', '.join(str(item) for item in skipped[:5])}",
                     resp,
                 )
             )
@@ -565,7 +587,7 @@ class LinebetAdapter(SourceAdapter):
         self._pace_detail_request()
         try:
             resp = self._request(
-                f"{BASE_URL}{_DETAIL_PATH}",
+                f"{self.base_url}{_DETAIL_PATH}",
                 params={
                     "id": game_id,
                     "lng": "en",
@@ -611,7 +633,7 @@ class LinebetAdapter(SourceAdapter):
         external = ExternalRef(
             source=self.source,
             source_event_id=str(source_id),
-            source_url=f"{BASE_URL}/en/line/football",
+            source_url=f"{self.base_url}/en/line/football",
         )
 
         def quote(market: str, prices: dict[str, float]) -> OddsQuote:
@@ -623,7 +645,7 @@ class LinebetAdapter(SourceAdapter):
                 away=away,
                 competition=competition,
                 market=market,
-                bookmaker="linebet",
+                bookmaker=self.source,
                 prices=prices,
             )
 
@@ -673,7 +695,12 @@ class LinebetAdapter(SourceAdapter):
             try:
                 with httpx.Client(
                     timeout=httpx.Timeout(CONNECT_TIMEOUT_S, connect=CONNECT_TIMEOUT_S),
-                    headers=_HEADERS,
+                    headers={
+                        "User-Agent": USER_AGENT,
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "en-US,en;q=0.9",
+                        "Referer": self.referer,
+                    },
                     follow_redirects=False,
                 ) as client:
                     resp = client.get(url, params=params)
@@ -764,3 +791,56 @@ def _correct_score_quotes(group: Mapping[str, Any]) -> dict[str, float] | None:
     if len(prices) < 5:
         return None
     return {label: prices[label] for label in sorted(prices)}
+
+
+class BetwinnerAdapter(LinebetAdapter):
+    """BetWinner 1xBet-family adapter (probe-verified 2026-09-24).
+
+    Serves the same public ``LineFeed`` list/detail schema.  The linebet
+    ``country=87&partner=189`` list params are omitted (not verified for
+    BetWinner); the no-country list call answered 49 real events live.
+    """
+
+    source: ClassVar[str] = "betwinner"
+    base_url: ClassVar[str] = "https://betwinner.com"
+    referer: ClassVar[str] = "https://betwinner.com/en/line/football"
+    supports_h2h: ClassVar[bool] = False
+    list_params: ClassVar[dict[str, str]] = {
+        "sports": "1",
+        "count": str(LIST_PAGE_SIZE),
+        "lng": "en",
+        "tf": "2200000",
+        "tz": "3",
+        "mode": "4",
+        "getEmpty": "true",
+    }
+    slate_categories: ClassVar[frozenset[str]] = frozenset(
+        {_ODDS_CATEGORY, _ODDS_BETWINNER_CATEGORY}
+    )
+
+
+class OneXBetKeAdapter(LinebetAdapter):
+    """1xBet Kenya 1xBet-family adapter (probe-verified 2026-09-24).
+
+    The Kenyan domain answers the full verified linebet list params
+    (country=87/partner=189) with 50 real events.
+    """
+
+    source: ClassVar[str] = "1xbet_ke"
+    base_url: ClassVar[str] = "https://1xbet.co.ke"
+    referer: ClassVar[str] = "https://1xbet.co.ke/en/line/football"
+    supports_h2h: ClassVar[bool] = False
+    list_params: ClassVar[dict[str, str]] = {
+        "sports": "1",
+        "count": str(LIST_PAGE_SIZE),
+        "lng": "en",
+        "tf": "2200000",
+        "tz": "3",
+        "mode": "4",
+        "country": "87",
+        "partner": "189",
+        "getEmpty": "true",
+    }
+    slate_categories: ClassVar[frozenset[str]] = frozenset(
+        {_ODDS_CATEGORY, _ODDS_1XBET_KE_CATEGORY}
+    )

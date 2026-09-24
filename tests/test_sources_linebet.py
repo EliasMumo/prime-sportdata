@@ -17,7 +17,11 @@ import pytest
 
 from prime_sportdata.errors import BadRequest, NotFound
 from prime_sportdata.sources.base import SourceResponse
-from prime_sportdata.sources.linebet import LinebetAdapter
+from prime_sportdata.sources.linebet import (
+    BetwinnerAdapter,
+    LinebetAdapter,
+    OneXBetKeAdapter,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -69,6 +73,65 @@ def _assembled_h2h_response() -> SourceResponse:
         status=200,
         fetched_at="2026-09-09T10:00:00+00:00",
     )
+
+
+def _betwinner_list_body() -> dict:
+    return json.loads((FIXTURES / "betwinner_matches.json").read_text(encoding="utf-8"))
+
+
+def _betwinner_gamezip_body() -> dict:
+    return json.loads((FIXTURES / "betwinner_gamezip.json").read_text(encoding="utf-8"))
+
+
+def _betwinner_assembled_odds_response() -> SourceResponse:
+    payload = {
+        "kind": "odds",
+        "payload": _betwinner_list_body(),
+        "details": {str(325699846): _betwinner_gamezip_body()["Value"]},
+        "detail_skipped": [],
+    }
+    return SourceResponse(
+        source="betwinner",
+        payload=json.dumps(payload),
+        url="https://betwinner.com/service-api/LineFeed/Get1x2_VZip",
+        status=200,
+        fetched_at="2026-09-24T10:00:00+00:00",
+    )
+
+
+# -- 1xBet-family siblings (probe-verified 2026-09-24) ---------------------
+
+
+def test_betwinner_parse_odds_emits_quotes_with_betwinner_bookmaker() -> None:
+    adapter = BetwinnerAdapter(clock=lambda: 0.0, sleep=lambda _: None)
+    outcome = adapter.parse_odds(_betwinner_assembled_odds_response())
+
+    assert outcome.quotes
+    assert {quote.bookmaker for quote in outcome.quotes} == {"betwinner"}
+    assert "1x2" in {quote.market for quote in outcome.quotes}
+    assert all(quote.external.source == "betwinner" for quote in outcome.quotes)
+
+
+def test_family_sibling_rejects_h2h_without_a_verified_path() -> None:
+    adapter = BetwinnerAdapter(clock=lambda: 0.0, sleep=lambda _: None)
+    with pytest.raises(NotFound, match="h2h is unverified"):
+        adapter.fetch("football", "h2h", {"entity_a": "Team A", "entity_b": "Team B"})
+
+
+def test_family_siblings_serve_their_explicit_odds_categories() -> None:
+    betwinner = BetwinnerAdapter(clock=lambda: 0.0, sleep=lambda _: None)
+    assert "odds_betwinner" in betwinner.slate_categories
+    onexbet = OneXBetKeAdapter(clock=lambda: 0.0, sleep=lambda _: None)
+    assert "odds_1xbet_ke" in onexbet.slate_categories
+    assert "odds_betwinner" not in onexbet.slate_categories
+
+
+def test_catalog_exposes_the_new_family_rows() -> None:
+    from prime_sportdata.catalog import default_source_order
+
+    assert default_source_order("football", "odds_betwinner") == ("betwinner",)
+    assert default_source_order("football", "odds_1xbet_ke") == ("1xbet_ke",)
+    assert "betwinner" in default_source_order("football", "odds")
 
 
 # -- parse_odds -------------------------------------------------------------

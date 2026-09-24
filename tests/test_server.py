@@ -92,7 +92,10 @@ def make_engine(tmp_path: Path, adapters: Mapping[str, FakeAdapter]) -> Engine:
 def healthy_adapters() -> dict[str, FakeAdapter]:
     return {
         name: FakeAdapter(name)
-        for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet")
+        for name in (
+            "flashscore", "sofascore", "livescore", "betexplorer",
+            "betika", "linebet", "betwinner", "1xbet_ke",
+        )
     }
 
 
@@ -118,6 +121,8 @@ def test_health_ok_with_source_and_breaker_states(client: TestClient) -> None:
         "betexplorer": "untested",
         "betika": "untested",
         "linebet": "untested",
+        "betwinner": "untested",
+        "1xbet_ke": "untested",
     }
     assert set(body["breakers"]) == {
         "flashscore",
@@ -126,6 +131,8 @@ def test_health_ok_with_source_and_breaker_states(client: TestClient) -> None:
         "betexplorer",
         "betika",
         "linebet",
+        "betwinner",
+        "1xbet_ke",
     }
     for view in body["breakers"].values():
         assert view["state"] == "closed"
@@ -169,11 +176,11 @@ def test_v1_unknown_source_pinning_is_400(tmp_path: Path) -> None:
 
 
 # --- /catalog -----------------------------------------------------------------
-def test_catalog_lists_all_18_rows_with_params_and_curl(client: TestClient) -> None:
+def test_catalog_lists_all_20_rows_with_params_and_curl(client: TestClient) -> None:
     resp = client.get("/catalog")
     assert resp.status_code == 200
     rows = resp.json()
-    assert len(rows) == 18
+    assert len(rows) == 20
     sports = {row["sport"] for row in rows}
     categories = {row["category"] for row in rows}
     assert sports == {"football", "basketball", "tennis"}
@@ -185,6 +192,8 @@ def test_catalog_lists_all_18_rows_with_params_and_curl(client: TestClient) -> N
         "odds",
         "odds_detailed",
         "odds_linebet",
+        "odds_betwinner",
+        "odds_1xbet_ke",
         "lineups",
     }
     for row in rows:
@@ -228,7 +237,7 @@ def test_v1_fixtures_returns_200_envelope(client: TestClient) -> None:
 def test_v1_valid_empty_is_200_events_empty(tmp_path: Path) -> None:
     adapters = {
         name: FakeAdapter(name)
-        for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet")
+        for name in ("flashscore", "sofascore", "livescore", "betexplorer", "betika", "linebet", "betwinner", "1xbet_ke")
     }
     adapters["flashscore"] = FakeAdapter("flashscore", empty=True)
     with TestClient(create_app(make_engine(tmp_path, adapters))) as client:

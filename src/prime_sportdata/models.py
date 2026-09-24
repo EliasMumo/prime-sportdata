@@ -19,6 +19,8 @@ Category = Literal[
     "odds",
     "odds_detailed",
     "odds_linebet",
+    "odds_betwinner",
+    "odds_1xbet_ke",
     "lineups",
 ]
 EventStatus = Literal["scheduled", "live", "finished", "postponed", "cancelled", "interrupted"]

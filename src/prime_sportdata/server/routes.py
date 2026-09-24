@@ -137,7 +137,8 @@ def _parse_row(sport: str, category: str) -> tuple[CatalogRow | None, JSONRespon
             "not_found",
             f"unknown sport or category: /v1/{sport}/{category} "
             "(known sports: football, basketball, tennis; categories: "
-            "fixtures, live, results, h2h, odds, odds_detailed, odds_linebet, lineups)",
+            "fixtures, live, results, h2h, odds, odds_detailed, odds_linebet, "
+            "odds_betwinner, odds_1xbet_ke, lineups)",
         )
     return row, None
 

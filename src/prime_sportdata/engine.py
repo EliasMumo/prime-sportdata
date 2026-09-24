@@ -116,6 +116,8 @@ DEFAULT_HOSTS: Mapping[str, str] = {
     "betexplorer": "www.betexplorer.com",
     "betika": "api.betika.com",
     "linebet": "linebet.com",
+    "betwinner": "betwinner.com",
+    "1xbet_ke": "1xbet.co.ke",
 }
 
 _CLOSED = "closed"
@@ -398,12 +400,15 @@ class Engine:
         envelope = self._fetch_uncached(sport, category, norm, order)
         if category == "live":
             ttl = self._ttl_live
-        elif category in ("odds", "odds_detailed", "odds_linebet"):
+        elif category in (
+            "odds", "odds_detailed", "odds_linebet", "odds_betwinner", "odds_1xbet_ke"
+        ):
             ttl = self._ttl_odds
         else:
             ttl = self._ttl_default
         if (
-            category in ("odds", "odds_detailed", "odds_linebet")
+            category
+            in ("odds", "odds_detailed", "odds_linebet", "odds_betwinner", "odds_1xbet_ke")
             # An empty odds answer is a source-rollover / cold-start symptom,
             # not a healthy empty day.  Caching it for the full odds TTL
             # replays emptiness to every caller (the daily publish retries
@@ -447,7 +452,10 @@ class Engine:
                         sport, category, source, norm, [], warnings=[exc.detail], started=started
                     )
                 try:
-                    if category in ("odds", "odds_detailed", "odds_linebet"):
+                    if category in (
+                        "odds", "odds_detailed", "odds_linebet",
+                        "odds_betwinner", "odds_1xbet_ke",
+                    ):
                         outcome: ParseOutcome = adapter.parse_odds(resp)
                     elif category == "lineups":
                         outcome = adapter.parse_lineups(resp)
@@ -587,7 +595,9 @@ class Engine:
                 home=H2HEntity(name=norm.get("entity_a") or ""),
                 away=H2HEntity(name=norm.get("entity_b") or ""),
             )
-        if category in ("odds", "odds_detailed", "odds_linebet"):
+        if category in (
+            "odds", "odds_detailed", "odds_linebet", "odds_betwinner", "odds_1xbet_ke"
+        ):
             return OddsPayload(quotes=list(quotes))
         if category == "lineups":
             if not events or not lineups:
