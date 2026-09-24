@@ -216,6 +216,19 @@ _PRIORITY_LEAGUES = frozenset(
         ("gaucho, serie a2", "brazil"),
         ("national league cup", "england"),
         ("emperor cup", "japan"),
+        # African/international breadth (owner-directed 2026-09-24,
+        # live-verified from the current upcoming list): the continental
+        # qualifiers and additional priced national leagues get the bounded
+        # detail budget so their complete HTFT/correct-score grids survive
+        # busy slates instead of only list-level 1X2 quotes.
+        ("africa cup of nations qualification", "international"),
+        ("uefa nations league", "international"),
+        ("premier league", "nigeria"),
+        ("canadian premier league", "canada"),
+        ("gulf cup", "international"),
+        ("fifa asean cup", "international"),
+        ("first division", "jordan"),
+        ("2. division a", "egypt"),
     }
 )
 

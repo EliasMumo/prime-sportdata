@@ -19,6 +19,7 @@ from prime_sportdata.models import OddsQuote
 from prime_sportdata.sources.base import SourceResponse
 from prime_sportdata.sources.betika import (
     BetikaAdapter,
+    _row_priority,
     _start_time_utc,
 )
 
@@ -135,6 +136,27 @@ def test_start_time_utc_invalid_returns_none() -> None:
     assert _start_time_utc("") is None
     assert _start_time_utc(None) is None
     assert _start_time_utc("not-a-time") is None
+
+
+def test_priority_pairs_cover_expanded_african_and_international_leagues() -> None:
+    """Pairs live-verified from the 2026-09-24 upcoming list must rank 0."""
+    pairs = [
+        ({"competition_name": "Africa Cup of Nations Qualification", "category": "International"}),
+        ({"competition_name": "UEFA Nations League", "category": "International"}),
+        ({"competition_name": "Premier League", "category": "Nigeria"}),
+        ({"competition_name": "Canadian Premier League", "category": "Canada"}),
+        ({"competition_name": "Gulf Cup", "category": "International"}),
+        ({"competition_name": "FIFA ASEAN Cup", "category": "International"}),
+        ({"competition_name": "First Division", "category": "Jordan"}),
+        ({"competition_name": "2. Division A", "category": "Egypt"}),
+    ]
+    for row in pairs:
+        assert _row_priority(row) == 0, row
+
+
+def test_priority_still_rejects_egyptian_premier_league_lookalike() -> None:
+    """The expanded set must not admit Egypt's senior 'Premier League'."""
+    assert _row_priority({"competition_name": "Premier League", "category": "Egypt"}) == 1
 
 
 def _list_row(
