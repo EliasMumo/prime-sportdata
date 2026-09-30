@@ -100,13 +100,14 @@ _JITTER_MAX_S = 0.8
 # list page size is 100 because the upcoming feed mixes many sports and
 # virtual football; only ``sport_name == "Soccer"`` rows are real matches.
 # Bounded per-fetch detail budget.  Raised 24 -> 36 on 2026-09-21
-# (owner-directed league expansion) and 36 -> 48 on 2026-09-23: the fitted
-# model now consumes reserve/regional leagues (Argentine reserves, Israeli
-# Liga Alef, Brazilian regional, England's National League Cup) whose rows
-# arrive early in the kickoff-ordered list, and the owner wants their
-# complete HTFT / correct-score / double-chance grids priced.  The budget
-# still bounds the ban-risk surface.
-MAX_DETAIL_REQUESTS = 48
+# (owner-directed league expansion), 36 -> 48 on 2026-09-23 (reserve/
+# regional leagues), and 48 -> 64 on 2026-10-01 (owner-directed HT/FT and
+# correct-score coverage: the wave's daily candidate set has ~100 fixtures
+# while 48 details yielded single-digit HT/FT grids).  Detail requests are
+# sequential and >= 1 s apart, so 64 keeps the worst-case fetch inside the
+# Render free-tier ~100 s proxy bound; raising further needs a paid plan or
+# an async detail phase.  The budget still bounds the ban-risk surface.
+MAX_DETAIL_REQUESTS = 64
 LIST_PAGE_SIZE = 500
 # Pagination is bounded for ban-risk discipline.  The verified list endpoint
 # serves the requested page size (``limit=500`` live-verified 2026-09-09) and
