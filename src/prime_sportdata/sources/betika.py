@@ -144,6 +144,13 @@ _MARKET_EXACT_GOALS = "21"
 _MARKET_CORNERS_TOTAL = "166"
 _MARKET_BOOKINGS_TOTAL = "139"
 _MARKET_FIRST_HALF_CORRECT_SCORE = "81"
+# Team-total markets ("CANADA TOTAL" / "PERU TOTAL" sections): one side's
+# goals against the line.  Live-verified 2026-10-03 (Canada vs Peru):
+# sub_type 19 = home total, 20 = away total, 69/70 = first-half equivalents.
+_MARKET_HOME_TOTAL = "19"
+_MARKET_AWAY_TOTAL = "20"
+_MARKET_FIRST_HALF_HOME_TOTAL = "69"
+_MARKET_FIRST_HALF_AWAY_TOTAL = "70"
 
 _TOTAL_SUB_TYPES = frozenset(
     {
@@ -151,6 +158,10 @@ _TOTAL_SUB_TYPES = frozenset(
         _MARKET_FIRST_HALF_TOTAL,
         _MARKET_CORNERS_TOTAL,
         _MARKET_BOOKINGS_TOTAL,
+        _MARKET_HOME_TOTAL,
+        _MARKET_AWAY_TOTAL,
+        _MARKET_FIRST_HALF_HOME_TOTAL,
+        _MARKET_FIRST_HALF_AWAY_TOTAL,
     }
 )
 _TOTAL_MARKET_PREFIX = {
@@ -158,6 +169,10 @@ _TOTAL_MARKET_PREFIX = {
     _MARKET_FIRST_HALF_TOTAL: "first_half_total",
     _MARKET_CORNERS_TOTAL: "corners_total",
     _MARKET_BOOKINGS_TOTAL: "bookings_total",
+    _MARKET_HOME_TOTAL: "home_total",
+    _MARKET_AWAY_TOTAL: "away_total",
+    _MARKET_FIRST_HALF_HOME_TOTAL: "first_half_home_total",
+    _MARKET_FIRST_HALF_AWAY_TOTAL: "first_half_away_total",
 }
 
 # Correct score completeness: a 0..4 home/away grid plus an explicit "OTHER"
@@ -605,7 +620,16 @@ class BetikaAdapter(SourceAdapter):
             key
             for key in markets
             if key.startswith(
-                ("total:", "first_half_total:", "corners_total:", "bookings_total:")
+                (
+                    "total:",
+                    "first_half_total:",
+                    "corners_total:",
+                    "bookings_total:",
+                    "home_total:",
+                    "away_total:",
+                    "first_half_home_total:",
+                    "first_half_away_total:",
+                )
             )
         ):
             prices = markets[market_key]
@@ -670,6 +694,10 @@ class BetikaAdapter(SourceAdapter):
                 _MARKET_CORNERS_TOTAL,
                 _MARKET_BOOKINGS_TOTAL,
                 _MARKET_FIRST_HALF_CORRECT_SCORE,
+                _MARKET_HOME_TOTAL,
+                _MARKET_AWAY_TOTAL,
+                _MARKET_FIRST_HALF_HOME_TOTAL,
+                _MARKET_FIRST_HALF_AWAY_TOTAL,
             }:
                 continue
             for outcome in odds:

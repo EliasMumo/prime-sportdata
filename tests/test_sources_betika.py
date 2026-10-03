@@ -89,6 +89,104 @@ def test_parse_odds_first_half_correct_score_grid(adapter: BetikaAdapter) -> Non
     assert ht_cs.bookmaker == "betika"
 
 
+def _team_total_detail() -> dict:
+    """Synthetic betika detail with team-total market groups (sub 19/20/69)."""
+    return {
+        "data": [
+            {
+                "sub_type_id": "19",
+                "name": "HOME TOTAL",
+                "odds": [
+                    {
+                        "display": "OVER 0.5",
+                        "odd_key": "over 0.5",
+                        "odd_value": "1.13",
+                        "special_bet_value": "total=0.5",
+                    },
+                    {
+                        "display": "UNDER 0.5",
+                        "odd_key": "under 0.5",
+                        "odd_value": "4.80",
+                        "special_bet_value": "total=0.5",
+                    },
+                    {
+                        "display": "OVER 1.5",
+                        "odd_key": "over 1.5",
+                        "odd_value": "1.66",
+                        "special_bet_value": "total=1.5",
+                    },
+                    {
+                        "display": "UNDER 1.5",
+                        "odd_key": "under 1.5",
+                        "odd_value": "2.05",
+                        "special_bet_value": "total=1.5",
+                    },
+                ],
+            },
+            {
+                "sub_type_id": "20",
+                "name": "AWAY TOTAL",
+                "odds": [
+                    {
+                        "display": "OVER 0.5",
+                        "odd_key": "over 0.5",
+                        "odd_value": "1.74",
+                        "special_bet_value": "total=0.5",
+                    },
+                    {
+                        "display": "UNDER 0.5",
+                        "odd_key": "under 0.5",
+                        "odd_value": "1.94",
+                        "special_bet_value": "total=0.5",
+                    },
+                ],
+            },
+            {
+                "sub_type_id": "69",
+                "name": "1ST HALF - HOME TOTAL",
+                "odds": [
+                    {
+                        "display": "OVER 0.5",
+                        "odd_key": "over 0.5",
+                        "odd_value": "1.62",
+                        "special_bet_value": "total=0.5",
+                    },
+                    {
+                        "display": "UNDER 0.5",
+                        "odd_key": "under 0.5",
+                        "odd_value": "2.11",
+                        "special_bet_value": "total=0.5",
+                    },
+                ],
+            },
+        ]
+    }
+
+
+def test_parse_odds_ships_team_total_markets(adapter: BetikaAdapter) -> None:
+    rows = json.loads((FIXTURES / "betika_matches.json").read_text(encoding="utf-8"))
+    row = next(item for item in rows["data"] if item.get("sport_name") == "Soccer")
+    match_id = str(row["parent_match_id"])
+    payload = json.dumps(
+        {"rows": rows["data"], "details": {match_id: _team_total_detail()}}
+    )
+    response = SourceResponse(
+        source="betika",
+        payload=payload,
+        url="https://api.betika.com/v1/uo/matches",
+        status=200,
+        fetched_at="2026-09-08T10:00:00+00:00",
+    )
+    outcome = adapter.parse_odds(response)
+    markets = {q.market: q for q in outcome.quotes}
+    assert markets["home_total_0_5"].prices == {"over": 1.13, "under": 4.80}
+    assert markets["home_total_1_5"].prices == {"over": 1.66, "under": 2.05}
+    assert markets["away_total_0_5"].prices == {"over": 1.74, "under": 1.94}
+    assert markets["first_half_home_total_0_5"].prices == {"over": 1.62, "under": 2.11}
+    for market, quote in markets.items():
+        assert quote.bookmaker == "betika", market
+
+
 def test_parse_odds_metadata(adapter: BetikaAdapter) -> None:
     outcome = adapter.parse_odds(_assembled_response())
     first = next(q for q in outcome.quotes if q.external.source_event_id == "73159940")
