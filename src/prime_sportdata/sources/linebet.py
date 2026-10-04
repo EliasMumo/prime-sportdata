@@ -142,11 +142,12 @@ _BACKOFF_BASE_S = 1.5
 _JITTER_MAX_S = 0.8
 LIST_PAGE_SIZE = 500
 MAX_DETAIL_REQUESTS = 24
-DETAIL_MIN_INTERVAL_S = 1.0
-# Wall-clock budget for the whole detail phase.  The hosted worker must
-# answer the odds/odds_linebet call well inside the proxy timeout (Render
-# free tier kills at ~100s); slower egress simply yields fewer details.
-DETAIL_BUDGET_S = 45.0
+DETAIL_MIN_INTERVAL_S = 0.75
+# Wall-clock budget for the whole detail phase (main groups + best-effort half
+# subgames).  The hosted worker must answer the odds/odds_linebet call well
+# inside the proxy timeout (Render free tier kills at ~100s); slower egress
+# simply yields fewer details.  60s keeps ~35s of headroom for the list phase.
+DETAIL_BUDGET_S = 60.0
 
 _VIRTUAL_MARKERS = ("cyber", "virtual", "esoccer", "e-football", "zoom")
 
@@ -883,7 +884,7 @@ class LinebetAdapter(SourceAdapter):
                     "ref": "152",
                 },
             )
-        except (NotFound, SourceUnavailable):
+        except (NotFound, SourceUnavailable, SourceBlocked, RateLimited):
             return None
         try:
             body = resp.json()
