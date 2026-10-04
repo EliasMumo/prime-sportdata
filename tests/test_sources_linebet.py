@@ -36,18 +36,6 @@ def _gamezip_body() -> dict:
     return json.loads((FIXTURES / "linebet_gamezip.json").read_text(encoding="utf-8"))
 
 
-def _gameevents_body() -> dict:
-    return json.loads((FIXTURES / "linebet_gameevents.json").read_text(encoding="utf-8"))
-
-
-def _first_half_body() -> dict:
-    return json.loads((FIXTURES / "linebet_first_half_gamezip.json").read_text(encoding="utf-8"))
-
-
-def _second_half_body() -> dict:
-    return json.loads((FIXTURES / "linebet_second_half_gamezip.json").read_text(encoding="utf-8"))
-
-
 def _h2h_body() -> dict:
     return json.loads((FIXTURES / "linebet_h2h.json").read_text(encoding="utf-8"))
 
@@ -246,11 +234,21 @@ def _assembled_halves_response() -> SourceResponse:
     )
 
 
-def test_halves_from_game_events_decode_verified_subgames() -> None:
-    from prime_sportdata.sources.linebet import _halves_from_game_events
+def test_halves_from_main_payload_decode_verified_subgames() -> None:
+    from prime_sportdata.sources.linebet import _halves_from_main_payload
 
-    halves = _halves_from_game_events(_gameevents_body())
-    assert halves == {"first_half": "373692370", "second_half": "373692378"}
+    # betwinner_gamezip.json (live capture 2026-09-24) already carries the
+    # half market subgames in its SG list (TG empty, PN 1st/2nd half).
+    halves = _halves_from_main_payload(_betwinner_gamezip_body()["Value"])
+    assert halves == {"first_half": "325699848", "second_half": "325699852"}
+
+
+def _first_half_body() -> dict:
+    return json.loads((FIXTURES / "linebet_first_half_gamezip.json").read_text(encoding="utf-8"))
+
+
+def _second_half_body() -> dict:
+    return json.loads((FIXTURES / "linebet_second_half_gamezip.json").read_text(encoding="utf-8"))
 
 
 def test_parse_odds_ships_first_and_second_half_markets() -> None:

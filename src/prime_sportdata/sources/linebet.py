@@ -12,19 +12,19 @@ endpoints are served without authentication.  Live-verified this session:
   evidence, never used as a model input).
 * ``GET /service-api/LineFeed/GetGameZip?id={CI}&lng=en&isSubGames=true
   &GroupEvents=true&countevents=250&grMode=4&partner=189&topGroups=&country=87
-  &marketType=1&isNewBuilder=true`` -> ``{Success, Value: {..., GE: [groups]}}``
-  with the full additional-market groups for one game.  The same path also
-  accepts half-subgame const ids (``id={half constId}``) and then returns that
-  half's own market groups (1X2, double chance, BTTS, totals, team totals).
-* ``GET /service-api/main-line-feed/v3/gameEvents?cfView=3&countEvents=250
-  &fcountry=87&gameId={I}&gr=537&grMode=4&lng=en&marketType=1&ref=152`` ->
-  ``{subGamesForMainGame: [...]}`` where each subgame carries ``subGameName``
-  ("1st half"/"2nd half"/"Corners"/...) and ``constId``.  ``gameId`` is the
-  statistics game id from the main GetGameZip ``Value.I`` field.  Live-verified
-  2026-10-04: the "1st half" and "2nd half" const ids return those halves'
-  markets through GetGameZip, matching the site's rendered 1st-half/2nd-half
-  sections (Kosovo-Austria: 2nd-half 1X2 3.92/2.46/2.35, DC 1.52/1.47/1.21,
-  BTTS 3.34/1.289 — exact match with the API values).
+  &marketType=1&isNewBuilder=true`` -> ``{Success, Value: {..., GE: [groups],
+  SG: [subgames]}}`` with the full additional-market groups for one game.
+  The ``SG`` list contains the half market subgames (``PN`` "1st half"/
+  "2nd half", ``TG`` empty, ``P`` 1/2) each carrying a ``CI`` const id; the
+  same path accepts that const id as ``id={half constId}`` and then returns
+  the half's own market groups (1X2, double chance, BTTS, totals, team
+  totals).  Live-verified 2026-10-04: the half const ids return those halves'
+  markets, matching the site's rendered 1st-half/2nd-half sections
+  (Kosovo-Austria: 2nd-half 1X2 3.92/2.46/2.35, DC 1.52/1.47/1.21, BTTS
+  3.34/1.289 — exact match with the API values).
+* ``GET /service-api/main-line-feed/v3/gameEvents`` (``cfView=3&countEvents=250
+  &fcountry=87&gameId={I}&gr=537&grMode=4&lng=en&marketType=1&ref=152``) also
+  lists the same half subgames (probe-only; not shipped as a data path).
 * ``GET /service-api/statisticfeed/api/v1/Game/h2h?id={I}&lng=en&ref=189
   &fcountry=87&gr=650`` -> ``{teams, gameShorts, entity}`` head-to-head
   history: past meetings (scores, halves, cards, winner, tournament title) and
@@ -49,9 +49,9 @@ Market decoding (1xBet group conventions, verified against live events):
 Half markets (live-verified 2026-10-04 against the site's rendered 1st-half
 and 2nd-half sections, then shipped):
 
-* the main-game ``Value.I`` keys a gameEvents call whose
-  ``subGamesForMainGame`` lists "1st half" and "2nd half" subgames with their
-  own ``constId``;
+* the main-game ``Value.SG`` list already contains the half market subgames
+  (``PN`` "1st half"/"2nd half", ``TG`` empty) with their ``CI`` const ids;
+  no separate discovery call is needed;
 * GetGameZip on a half const id returns that half's groups: group 1 = 1X2,
   group 8 = double chance, group 19 = BTTS, group 17 = totals,
   group 15 = home team total, group 62 = away team total;
@@ -133,7 +133,6 @@ _HEADERS: dict[str, str] = {
 BASE_URL = "https://linebet.com"
 _LIST_PATH = "/service-api/LineFeed/Get1x2_VZip"
 _DETAIL_PATH = "/service-api/LineFeed/GetGameZip"
-_GAME_EVENTS_PATH = "/service-api/main-line-feed/v3/gameEvents"
 _H2H_PATH = "/service-api/statisticfeed/api/v1/Game/h2h"
 
 CONNECT_TIMEOUT_S = 15.0
@@ -316,23 +315,26 @@ def _group_1x2_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
     return prices if set(prices) == {"1", "X", "2"} else None
 
 
-def _halves_from_game_events(body: Mapping[str, Any]) -> dict[str, object]:
-    """1st/2nd-half subgame const ids from a gameEvents payload.
+def _halves_from_main_payload(value: Mapping[str, Any]) -> dict[str, str]:
+    """1st/2nd-half subgame const ids from a main GetGameZip ``Value``.
 
-    Live-verified 2026-10-04: ``subGamesForMainGame`` lists the site's market
-    subgames with ``subGameName`` "1st half"/"2nd half" (``period`` 1/2); each
-    subgame's ``constId`` is accepted by GetGameZip as the game id and returns
-    that half's own market groups.
+    Live-verified 2026-10-04: the main payload's ``SG`` list carries the half
+    market subgames as entries with ``PN`` "1st half"/"2nd half" and an empty
+    ``TG`` (stats subgames carry their stat name in ``TG`` instead).  Each
+    entry's ``CI`` is accepted by GetGameZip as the game id and returns that
+    half's own market groups.
     """
-    subgames = body.get("subGamesForMainGame") if isinstance(body, dict) else None
+    subgames = value.get("SG") if isinstance(value, dict) else None
     if not isinstance(subgames, list):
         return {}
-    result: dict[str, object] = {}
+    result: dict[str, str] = {}
     for subgame in subgames:
         if not isinstance(subgame, dict):
             continue
-        name = subgame.get("subGameName")
-        const_id = subgame.get("constId")
+        name = subgame.get("PN")
+        if subgame.get("TG") not in ("", None):
+            continue  # stat subgame (Yellow Cards, Shots On Target, ...)
+        const_id = subgame.get("CI")
         if isinstance(const_id, bool) or not isinstance(const_id, (int, float, str)):
             continue
         if name == "1st half" and _FIRST_HALF not in result:
@@ -858,39 +860,14 @@ class LinebetAdapter(SourceAdapter):
         detail: Mapping[str, Any],
         started_at: float,
     ) -> dict[str, Any] | None:
-        """Best-effort 1st/2nd-half subgame discovery + detail fetch.
+        """Best-effort 1st/2nd-half subgame detail fetches.
 
-        Bounded by the same wall budget as the main detail phase; any missing
-        endpoint, non-JSON body, or timeout leaves the halves unshipped.
+        The half const ids come from the main payload's own ``SG`` list (no
+        separate discovery request).  Bounded by the same wall budget as the
+        main detail phase; any missing id, non-JSON body, or error leaves the
+        halves unshipped.
         """
-        stat_id = detail.get("I") if isinstance(detail, dict) else None
-        if isinstance(stat_id, bool) or not isinstance(stat_id, (int, float, str)):
-            return None
-        if self._clock() - started_at >= DETAIL_BUDGET_S:
-            return None
-        self._pace_detail_request()
-        try:
-            resp = self._request(
-                f"{self.base_url}{_GAME_EVENTS_PATH}",
-                params={
-                    "cfView": "3",
-                    "countEvents": "250",
-                    "fcountry": "87",
-                    "gameId": str(stat_id),
-                    "gr": "537",
-                    "grMode": "4",
-                    "lng": "en",
-                    "marketType": "1",
-                    "ref": "152",
-                },
-            )
-        except (NotFound, SourceUnavailable, SourceBlocked, RateLimited):
-            return None
-        try:
-            body = resp.json()
-        except ValueError:
-            return None
-        halves = _halves_from_game_events(body)
+        halves = _halves_from_main_payload(detail)
         if not halves:
             return None
         fetched: dict[str, Any] = {}
@@ -898,7 +875,7 @@ class LinebetAdapter(SourceAdapter):
             if self._clock() - started_at >= DETAIL_BUDGET_S:
                 break
             half_id = halves.get(half_name)
-            if not isinstance(half_id, str):
+            if half_id is None:
                 continue
             half_value = self._fetch_detail(half_id)
             if half_value is not None:
