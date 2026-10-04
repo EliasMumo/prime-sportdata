@@ -13,35 +13,64 @@ endpoints are served without authentication.  Live-verified this session:
 * ``GET /service-api/LineFeed/GetGameZip?id={CI}&lng=en&isSubGames=true
   &GroupEvents=true&countevents=250&grMode=4&partner=189&topGroups=&country=87
   &marketType=1&isNewBuilder=true`` -> ``{Success, Value: {..., GE: [groups]}}``
-  with the full additional-market groups for one game.
+  with the full additional-market groups for one game.  The same path also
+  accepts half-subgame const ids (``id={half constId}``) and then returns that
+  half's own market groups (1X2, double chance, BTTS, totals, team totals).
+* ``GET /service-api/main-line-feed/v3/gameEvents?cfView=3&countEvents=250
+  &fcountry=87&gameId={I}&gr=537&grMode=4&lng=en&marketType=1&ref=152`` ->
+  ``{subGamesForMainGame: [...]}`` where each subgame carries ``subGameName``
+  ("1st half"/"2nd half"/"Corners"/...) and ``constId``.  ``gameId`` is the
+  statistics game id from the main GetGameZip ``Value.I`` field.  Live-verified
+  2026-10-04: the "1st half" and "2nd half" const ids return those halves'
+  markets through GetGameZip, matching the site's rendered 1st-half/2nd-half
+  sections (Kosovo-Austria: 2nd-half 1X2 3.92/2.46/2.35, DC 1.52/1.47/1.21,
+  BTTS 3.34/1.289 — exact match with the API values).
 * ``GET /service-api/statisticfeed/api/v1/Game/h2h?id={I}&lng=en&ref=189
   &fcountry=87&gr=650`` -> ``{teams, gameShorts, entity}`` head-to-head
   history: past meetings (scores, halves, cards, winner, tournament title) and
   aggregated H2H counters (wins/draws/team stats).  ``id`` is the statistics
   game id from the list event's ``I`` field.
 
-Market decoding (1xBet group conventions, verified against a live UCL event):
+Market decoding (1xBet group conventions, verified against live events):
 
 * flat list ``E``: 1X2 — type 1 = home, 2 = draw, 3 = away (cross-checked
   against the site's own WP probabilities);
 * group 8: double chance — three columns in 1X/12/X2 order;
-* group 19: both teams to score — first column holds both rows
-  (type 180 = yes, 11273 = no);
+* group 19: both teams to score — type 180 = yes, 181 = no (any row order);
+  the ``P``-parameterized rows in the same group (11273/11274) are the
+  2nd-half variants and are ignored here — half markets ship separately via
+  the half subgames below;
 * group 17: totals — over-lines / under-lines columns;
 * group 8863: correct score — home-win / draw / away-win score columns with
   ``P = home + away/1000`` (e.g. 2.001 = 2:1, 0.002 = 0:2).  The site lists
   only the scores it prices (no OTHER bucket), so an incomplete 0..4 grid is
   shipped as-is and completeness stays the consumer's call.
 
-Deliberately NOT shipped: the HT/FT group (11412) exists but its mixed
-outcome encoding (plain rows + ``P=2`` second-half rows in the same column)
-was not unambiguously decodable from the live capture — SPEC honesty rule:
-unverified decodes never ship.
+Half markets (live-verified 2026-10-04 against the site's rendered 1st-half
+and 2nd-half sections, then shipped):
 
-Only endpoints that were live-fetched AND successfully parsed during the
-2026-09-09 probe session are shipped as data paths (SPEC: every shipped URL
-must have been verified by a live fetch).  The adapter is football-only:
-only football paths were verified.
+* the main-game ``Value.I`` keys a gameEvents call whose
+  ``subGamesForMainGame`` lists "1st half" and "2nd half" subgames with their
+  own ``constId``;
+* GetGameZip on a half const id returns that half's groups: group 1 = 1X2,
+  group 8 = double chance, group 19 = BTTS, group 17 = totals,
+  group 15 = home team total, group 62 = away team total;
+* shipped market keys: ``first_half_1x2`` / ``second_half_1x2``,
+  ``first_half_double_chance`` / ``second_half_double_chance``,
+  ``first_half_btts`` / ``second_half_btts``,
+  ``first_half_total_{x}_{y}`` / ``second_half_total_{x}_{y}``,
+  ``first_half_home_total_{x}_{y}`` / ``second_half_away_total_{x}_{y}`` and
+  their second-half equivalents.
+
+Deliberately NOT shipped: group 11412 (a combined halves-related group) whose
+mixed outcome encoding (plain rows + ``P=2`` second-half rows in the same
+column) was not unambiguously decodable from the live capture — SPEC honesty
+rule: unverified decodes never ship.
+
+Only endpoints that were live-fetched AND successfully parsed during a probe
+session are shipped as data paths (SPEC: every shipped URL must have been
+verified by a live fetch).  The adapter is football-only: only football paths
+were verified.
 
 Retry discipline (SPEC ban-risk policy): max 2 retries, exponential backoff
 with jitter, ONLY on transport timeouts/errors and HTTP 5xx — never on
@@ -104,6 +133,7 @@ _HEADERS: dict[str, str] = {
 BASE_URL = "https://linebet.com"
 _LIST_PATH = "/service-api/LineFeed/Get1x2_VZip"
 _DETAIL_PATH = "/service-api/LineFeed/GetGameZip"
+_GAME_EVENTS_PATH = "/service-api/main-line-feed/v3/gameEvents"
 _H2H_PATH = "/service-api/statisticfeed/api/v1/Game/h2h"
 
 CONNECT_TIMEOUT_S = 15.0
@@ -134,8 +164,13 @@ _GROUP_DOUBLE_CHANCE = 8
 _GROUP_BTTS = 19
 _GROUP_TOTALS = 17
 _GROUP_CORRECT_SCORE = 8863
+_GROUP_1X2 = 1
+_GROUP_INDIVIDUAL_TOTAL_HOME = 15
+_GROUP_INDIVIDUAL_TOTAL_AWAY = 62
 
 _DC_LABELS = ("1X", "12", "X2")
+_FIRST_HALF = "first_half"
+_SECOND_HALF = "second_half"
 
 
 def _backoff_seconds(attempt: int) -> float:
@@ -234,25 +269,76 @@ def _double_chance_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
 
 
 def _btts_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
-    """Group 19: first column holds both rows (type 180 = yes, 11273 = no)."""
+    """Group 19: both teams to score (type 180 = yes, 181 = no).
+
+    Rows may share one column or sit in separate columns.  Rows carrying a
+    ``P`` parameter (11273/11274) are the 2nd-half variants; they are
+    ignored here because half markets ship separately through the half
+    subgames (live-verified 2026-10-04).
+    """
     columns = group.get("E")
     if not isinstance(columns, list) or not columns:
         return None
-    column = columns[0] if isinstance(columns[0], list) else columns
-    if not isinstance(column, list) or not column:
+    prices: dict[str, float] = {}
+    for column in columns:
+        rows = column if isinstance(column, list) else [column]
+        for entry in rows:
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("P") is not None:
+                continue  # half-variant row, not the regular-time market
+            odds = _clean_odds(entry.get("C"))
+            if odds is None:
+                continue
+            if entry.get("T") == 180:
+                prices["yes"] = odds
+            elif entry.get("T") == 181:
+                prices["no"] = odds
+    return prices if set(prices) == {"yes", "no"} else None
+
+
+def _group_1x2_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
+    """Group 1 (main or half subgame): three columns, type 1/2/3 = home/draw/away."""
+    columns = group.get("E")
+    if not isinstance(columns, list) or len(columns) != 3:
         return None
     prices: dict[str, float] = {}
-    for entry in column:
-        if not isinstance(entry, dict):
-            continue
+    for column in columns:
+        if not isinstance(column, list) or len(column) != 1 or not isinstance(column[0], dict):
+            return None
+        entry = column[0]
+        market_type = entry.get("T")
         odds = _clean_odds(entry.get("C"))
-        if odds is None:
+        if market_type not in (1, 2, 3) or odds is None:
+            return None
+        prices[{1: "1", 2: "X", 3: "2"}[market_type]] = odds
+    return prices if set(prices) == {"1", "X", "2"} else None
+
+
+def _halves_from_game_events(body: Mapping[str, Any]) -> dict[str, object]:
+    """1st/2nd-half subgame const ids from a gameEvents payload.
+
+    Live-verified 2026-10-04: ``subGamesForMainGame`` lists the site's market
+    subgames with ``subGameName`` "1st half"/"2nd half" (``period`` 1/2); each
+    subgame's ``constId`` is accepted by GetGameZip as the game id and returns
+    that half's own market groups.
+    """
+    subgames = body.get("subGamesForMainGame") if isinstance(body, dict) else None
+    if not isinstance(subgames, list):
+        return {}
+    result: dict[str, object] = {}
+    for subgame in subgames:
+        if not isinstance(subgame, dict):
             continue
-        if entry.get("T") == 180:
-            prices["yes"] = odds
-        elif entry.get("T") == 11273:
-            prices["no"] = odds
-    return prices if set(prices) == {"yes", "no"} else None
+        name = subgame.get("subGameName")
+        const_id = subgame.get("constId")
+        if isinstance(const_id, bool) or not isinstance(const_id, (int, float, str)):
+            continue
+        if name == "1st half" and _FIRST_HALF not in result:
+            result[_FIRST_HALF] = str(const_id)
+        elif name == "2nd half" and _SECOND_HALF not in result:
+            result[_SECOND_HALF] = str(const_id)
+    return result
 
 
 class LinebetAdapter(SourceAdapter):
@@ -268,6 +354,11 @@ class LinebetAdapter(SourceAdapter):
     referer: ClassVar[str] = "https://linebet.com/en/line/football"
     # h2h is verified only for linebet; siblings serve odds categories only.
     supports_h2h: ClassVar[bool] = True
+    # 1st/2nd-half subgame shipping is live-verified only for betwinner and
+    # 1xbet_ke (2026-10-04); linebet.com's gameEvents path is the same schema
+    # but could not be live-verified during that session, so it stays off
+    # until a verified fetch exists (SPEC: unverified paths never ship).
+    supports_halves: ClassVar[bool] = False
     list_params: ClassVar[dict[str, str]] = {
         "sports": "1",
         "count": str(LIST_PAGE_SIZE),
@@ -338,6 +429,7 @@ class LinebetAdapter(SourceAdapter):
         if category in self.slate_categories:
             details: dict[str, Any] = {}
             detail_skipped: list[str] = []
+            half_details: dict[str, Any] = {}
             detail_started = self._clock()
             for event in self._select_detail_rows(events):
                 elapsed = self._clock() - detail_started
@@ -353,10 +445,17 @@ class LinebetAdapter(SourceAdapter):
                     detail_skipped.append(str(game_id))
                     continue
                 details[str(game_id)] = detail
+                # Best-effort halves enrichment, bounded by the same wall
+                # budget as the detail phase; silently skipped on any failure.
+                if self.supports_halves:
+                    halves = self._fetch_halves(detail, detail_started)
+                    if halves:
+                        half_details[str(game_id)] = halves
             assembled: dict[str, Any] = {
                 "kind": "odds",
                 "payload": list_payload,
                 "details": details,
+                "half_details": half_details,
                 "detail_skipped": detail_skipped,
             }
             return SourceResponse(
@@ -524,6 +623,9 @@ class LinebetAdapter(SourceAdapter):
         details = payload.get("details")
         if not isinstance(details, dict):
             details = {}
+        half_details = payload.get("half_details")
+        if not isinstance(half_details, dict):
+            half_details = {}
         skipped = payload.get("detail_skipped")
         warnings = [
             parse_warning(
@@ -536,8 +638,10 @@ class LinebetAdapter(SourceAdapter):
                 resp,
             ),
             parse_warning(
-                f"{resp.source} HT/FT group (11412) is present but its outcome "
-                "encoding was not unambiguously decodable; it is not shipped",
+                f"{resp.source} combined halves group (11412) is present but its "
+                "outcome encoding is not unambiguously decodable; it is not "
+                "shipped. 1st-half/2nd-half markets ship via the half subgames "
+                "instead",
                 resp,
             ),
         ]
@@ -553,7 +657,7 @@ class LinebetAdapter(SourceAdapter):
         for event in events:
             if not isinstance(event, dict):
                 continue
-            match_quotes = self._normalize_event(event, details)
+            match_quotes = self._normalize_event(event, details, half_details)
             if match_quotes is not None:
                 quotes.extend(match_quotes)
         return ParseOutcome(quotes=quotes, warnings=warnings)
@@ -617,6 +721,7 @@ class LinebetAdapter(SourceAdapter):
         self,
         event: Mapping[str, Any],
         details: Mapping[str, Any],
+        half_details: Mapping[str, Any] | None = None,
     ) -> list[OddsQuote] | None:
         home = str(event.get("O1") or "").strip()
         away = str(event.get("O2") or "").strip()
@@ -683,9 +788,121 @@ class LinebetAdapter(SourceAdapter):
             cs = _correct_score_quotes(cs_group)
             if cs is not None:
                 quotes.append(quote("correct_score", cs))
+        if half_details is not None:
+            halves = half_details.get(str(source_id))
+            if isinstance(halves, dict):
+                for half_name in (_FIRST_HALF, _SECOND_HALF):
+                    half_value = halves.get(half_name)
+                    if isinstance(half_value, dict):
+                        quotes.extend(self._half_quotes(half_name, half_value, quote))
         if not quotes:
             return None
         return quotes
+
+    def _half_quotes(
+        self,
+        half_name: str,
+        value: Mapping[str, Any],
+        quote: Callable[[str, dict[str, float]], OddsQuote],
+    ) -> list[OddsQuote]:
+        """Decode one half subgame (1st/2nd half) into prefixed market quotes.
+
+        Group layout verified 2026-10-04 against the site's rendered half
+        sections: 1 = 1X2, 8 = double chance, 19 = BTTS, 17 = totals,
+        15 = home team total, 62 = away team total.
+        """
+        prefix = "first_half_" if half_name == _FIRST_HALF else "second_half_"
+        groups = value.get("GE")
+        if not isinstance(groups, list):
+            return []
+
+        def half_group(group_id: int) -> Mapping[str, Any] | None:
+            for entry in groups:
+                if isinstance(entry, dict) and entry.get("G") == group_id:
+                    return entry
+            return None
+
+        quotes: list[OddsQuote] = []
+        g1 = half_group(_GROUP_1X2)
+        if g1 is not None:
+            prices = _group_1x2_prices(g1)
+            if prices is not None:
+                quotes.append(quote(f"{prefix}1x2", prices))
+        dc_group = half_group(_GROUP_DOUBLE_CHANCE)
+        if dc_group is not None:
+            dc = _double_chance_prices(dc_group)
+            if dc is not None:
+                quotes.append(quote(f"{prefix}double_chance", dc))
+        btts_group = half_group(_GROUP_BTTS)
+        if btts_group is not None:
+            btts = _btts_prices(btts_group)
+            if btts is not None:
+                quotes.append(quote(f"{prefix}btts", btts))
+        totals_group = half_group(_GROUP_TOTALS)
+        if totals_group is not None:
+            for market, prices in _totals_quotes(totals_group).items():
+                quotes.append(quote(f"{prefix}{market}", prices))
+        home_total_group = half_group(_GROUP_INDIVIDUAL_TOTAL_HOME)
+        if home_total_group is not None:
+            for market, prices in _totals_quotes(home_total_group).items():
+                quotes.append(quote(f"{prefix}home_{market}", prices))
+        away_total_group = half_group(_GROUP_INDIVIDUAL_TOTAL_AWAY)
+        if away_total_group is not None:
+            for market, prices in _totals_quotes(away_total_group).items():
+                quotes.append(quote(f"{prefix}away_{market}", prices))
+        return quotes
+
+    def _fetch_halves(
+        self,
+        detail: Mapping[str, Any],
+        started_at: float,
+    ) -> dict[str, Any] | None:
+        """Best-effort 1st/2nd-half subgame discovery + detail fetch.
+
+        Bounded by the same wall budget as the main detail phase; any missing
+        endpoint, non-JSON body, or timeout leaves the halves unshipped.
+        """
+        stat_id = detail.get("I") if isinstance(detail, dict) else None
+        if isinstance(stat_id, bool) or not isinstance(stat_id, (int, float, str)):
+            return None
+        if self._clock() - started_at >= DETAIL_BUDGET_S:
+            return None
+        self._pace_detail_request()
+        try:
+            resp = self._request(
+                f"{self.base_url}{_GAME_EVENTS_PATH}",
+                params={
+                    "cfView": "3",
+                    "countEvents": "250",
+                    "fcountry": "87",
+                    "gameId": str(stat_id),
+                    "gr": "537",
+                    "grMode": "4",
+                    "lng": "en",
+                    "marketType": "1",
+                    "ref": "152",
+                },
+            )
+        except (NotFound, SourceUnavailable):
+            return None
+        try:
+            body = resp.json()
+        except ValueError:
+            return None
+        halves = _halves_from_game_events(body)
+        if not halves:
+            return None
+        fetched: dict[str, Any] = {}
+        for half_name in (_FIRST_HALF, _SECOND_HALF):
+            if self._clock() - started_at >= DETAIL_BUDGET_S:
+                break
+            half_id = halves.get(half_name)
+            if not isinstance(half_id, str):
+                continue
+            half_value = self._fetch_detail(half_id)
+            if half_value is not None:
+                fetched[half_name] = half_value
+        return fetched or None
 
     # -- request ------------------------------------------------------------
 
@@ -805,6 +1022,9 @@ class BetwinnerAdapter(LinebetAdapter):
     base_url: ClassVar[str] = "https://betwinner.com"
     referer: ClassVar[str] = "https://betwinner.com/en/line/football"
     supports_h2h: ClassVar[bool] = False
+    # gameEvents + half subgames live-verified 2026-10-04 (Greece-Germany and
+    # Kosovo-Austria captures matched the site's rendered half sections).
+    supports_halves: ClassVar[bool] = True
     list_params: ClassVar[dict[str, str]] = {
         "sports": "1",
         "count": str(LIST_PAGE_SIZE),
@@ -830,6 +1050,8 @@ class OneXBetKeAdapter(LinebetAdapter):
     base_url: ClassVar[str] = "https://1xbet.co.ke"
     referer: ClassVar[str] = "https://1xbet.co.ke/en/line/football"
     supports_h2h: ClassVar[bool] = False
+    # gameEvents + half subgames live-verified 2026-10-04.
+    supports_halves: ClassVar[bool] = True
     list_params: ClassVar[dict[str, str]] = {
         "sports": "1",
         "count": str(LIST_PAGE_SIZE),

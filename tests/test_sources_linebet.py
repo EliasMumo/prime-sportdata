@@ -36,6 +36,18 @@ def _gamezip_body() -> dict:
     return json.loads((FIXTURES / "linebet_gamezip.json").read_text(encoding="utf-8"))
 
 
+def _gameevents_body() -> dict:
+    return json.loads((FIXTURES / "linebet_gameevents.json").read_text(encoding="utf-8"))
+
+
+def _first_half_body() -> dict:
+    return json.loads((FIXTURES / "linebet_first_half_gamezip.json").read_text(encoding="utf-8"))
+
+
+def _second_half_body() -> dict:
+    return json.loads((FIXTURES / "linebet_second_half_gamezip.json").read_text(encoding="utf-8"))
+
+
 def _h2h_body() -> dict:
     return json.loads((FIXTURES / "linebet_h2h.json").read_text(encoding="utf-8"))
 
@@ -168,7 +180,9 @@ def test_parse_odds_1x2_matches_live_capture(adapter: LinebetAdapter) -> None:
 def test_parse_odds_btts_and_double_chance(adapter: LinebetAdapter) -> None:
     outcome = adapter.parse_odds(_assembled_odds_response())
     btts = next(quote for quote in outcome.quotes if quote.market == "btts")
-    assert btts.prices == {"yes": 1.79, "no": 4.905}
+    # 180 = yes / 181 = no; the P-parameterized rows are 2nd-half variants and
+    # must not leak into the regular-time market (fixed 2026-10-04).
+    assert btts.prices == {"yes": 1.79, "no": 1.937}
     dc = next(quote for quote in outcome.quotes if quote.market == "double_chance")
     assert dc.prices == {"1X": 1.001, "12": 1.044, "X2": 8.9}
 
@@ -189,7 +203,84 @@ def test_parse_odds_warnings_are_honest(adapter: LinebetAdapter) -> None:
     outcome = adapter.parse_odds(_assembled_odds_response())
     joined = " | ".join(outcome.warnings)
     assert "not an approved execution bookmaker" in joined
-    assert "HT/FT" in joined
+    assert "11412" in joined
+
+
+# -- halves (live-verified 2026-10-04) --------------------------------------
+
+_GREECE_GERMANY_CI = "373692368"
+
+
+def _assembled_halves_response() -> SourceResponse:
+    event = {
+        "CI": int(_GREECE_GERMANY_CI),
+        "O1": "Greece",
+        "O2": "Germany",
+        "S": 1791139500,
+        "LE": "UEFA Nations League",
+        "L": "UEFA Nations League",
+        "E": [
+            {"T": 1, "C": 4.16},
+            {"T": 2, "C": 4.0},
+            {"T": 3, "C": 1.775},
+        ],
+    }
+    payload = {
+        "kind": "odds",
+        "payload": {"Value": [event]},
+        "details": {},
+        "half_details": {
+            _GREECE_GERMANY_CI: {
+                "first_half": _first_half_body()["Value"],
+                "second_half": _second_half_body()["Value"],
+            }
+        },
+        "detail_skipped": [],
+    }
+    return SourceResponse(
+        source="betwinner",
+        payload=json.dumps(payload),
+        url="https://betwinner.com/service-api/LineFeed/Get1x2_VZip",
+        status=200,
+        fetched_at="2026-10-04T14:45:00+00:00",
+    )
+
+
+def test_halves_from_game_events_decode_verified_subgames() -> None:
+    from prime_sportdata.sources.linebet import _halves_from_game_events
+
+    halves = _halves_from_game_events(_gameevents_body())
+    assert halves == {"first_half": "373692370", "second_half": "373692378"}
+
+
+def test_parse_odds_ships_first_and_second_half_markets() -> None:
+    adapter = BetwinnerAdapter(clock=lambda: 0.0, sleep=lambda _: None)
+    outcome = adapter.parse_odds(_assembled_halves_response())
+    by_market = {quote.market: quote for quote in outcome.quotes}
+    # 1st-half and 2nd-half 1X2 verified against the site's rendered halves
+    # for this feed (Greece-Germany capture 2026-10-04).
+    assert by_market["first_half_1x2"].prices == {"1": 4.35, "X": 2.375, "2": 2.29}
+    assert by_market["second_half_1x2"].prices == {"1": 4.1, "X": 2.76, "2": 2.08}
+    assert by_market["first_half_double_chance"].prices == {"1X": 1.54, "12": 1.51, "X2": 1.168}
+    assert by_market["second_half_double_chance"].prices == {"1X": 1.66, "12": 1.39, "X2": 1.188}
+    assert by_market["first_half_btts"].prices == {"yes": 3.72, "no": 1.239}
+    assert by_market["second_half_btts"].prices == {"yes": 2.84, "no": 1.382}
+    # Totals and team totals ship with the same line encoding as betika.
+    assert "first_half_total_0_5" in by_market
+    assert "second_half_total_0_5" in by_market
+    assert "first_half_home_total_0_5" in by_market
+    assert "second_half_away_total_0_5" in by_market
+    assert set(by_market["first_half_total_0_5"].prices) == {"over", "under"}
+    for market, quote in by_market.items():
+        if market.startswith(("first_half", "second_half")):
+            assert quote.bookmaker == "betwinner"
+            assert quote.external.source_event_id == _GREECE_GERMANY_CI
+
+
+def test_parse_odds_without_halves_stays_unchanged(adapter: LinebetAdapter) -> None:
+    outcome = adapter.parse_odds(_assembled_odds_response())
+    markets = {quote.market for quote in outcome.quotes}
+    assert not any(market.startswith(("first_half", "second_half")) for market in markets)
 
 
 # -- parse_events (h2h) -----------------------------------------------------
