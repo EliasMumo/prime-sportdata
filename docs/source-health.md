@@ -353,3 +353,38 @@ Brugge vs Aston Villa and AEK Athens vs LASK with all nine HTFT outcomes.
 | Oddspedia | Cloudflare challenge ("Just a moment...") | blocked |
 | 1xBet LineFeed | 302 geo-redirect | blocked |
 | Pinnacle guest API | sports 200 but leagues/markets 204 | geo-limited |
+
+## BetExplorer over/under detail path (2026-10-04)
+
+Goal: totals quotes for slates the day-wide odds lists miss (Argentine-league
+matchdays). Probe session on this machine, one static Chrome UA, plain IPv4.
+
+1. **Tab URL 301s server-side** — the match page's O/U tab href
+   `.../{event}/over-under/` answers `301 Moved Permanently` back to the base
+   match page for both finished and upcoming matches (verified for
+   `8p61npDl`, Newells Old Boys - Lanus, Liga Profesional). Not a viable data
+   path.
+2. **Browser session reveals the AJAX endpoint** — clicking the O/U tab
+   issues `GET /gres/ajax/betting-type-tabs.php?e={event}&b=ou&...` (tab bar
+   only) and `GET /match-odds/{event}/1/ou/bestOdds/?lang=en` (the actual
+   odds comparison table).
+3. **Server-side verification of the odds endpoint** — plain `curl -4` with
+   the static UA + Referer returned **HTTP 200, ~430 KB** for
+   `/match-odds/8p61npDl/1/ou/bestOdds/?lang=en`, body `{"odds": "<html>"}`.
+   No cookies/session tokens required. 66 bookmaker rows captured; row shape:
+
+   ```html
+   <tr data-bo="true" data-bid="417" data-bookie-id="1039">
+     <td class="h-text-left ...">... <a href="/bookmaker/...">1xBet</a> ...</td>
+     <td class="table-main__doubleparameter">0.5</td>
+     <td ... data-odd="1.12" ...>   <- over
+     <td ... data-odd="6.00" ...>   <- under
+   </tr>
+   ```
+
+4. **Verification note** — the endpoint payload carries no team names,
+   kickoff, or league context; the adapter takes home/away as request params
+   and emits `market="total_{line}"` with `prices={"over", "under"}`,
+   mirroring the betika totals conventions so downstream consumers reuse one
+   shape. Live captures kept as `tests/fixtures`-style inline strings in
+   `tests/test_sources_betexplorer.py` (offline tests only; no network).

@@ -1,5 +1,5 @@
-"""Catalog tests: 20 rows (odds 2026-09-08; odds_detailed Betika 2026-09-08;
-odds_betwinner/odds_1xbet_ke 2026-09-24; lineups 2026-09-20)."""
+"""Catalog tests: 21 rows (odds 2026-09-08; odds_detailed Betika 2026-09-08;
+odds_betwinner/odds_1xbet_ke 2026-09-24; lineups 2026-09-20; ou 2026-10-04)."""
 
 import pytest
 
@@ -17,8 +17,8 @@ SPORTS: tuple[str, ...] = ("football", "basketball", "tennis")
 CATEGORIES: tuple[str, ...] = ("fixtures", "live", "results", "h2h", "odds")
 
 
-def test_exactly_twenty_rows():
-    assert len(ROWS) == 20
+def test_exactly_twenty_one_rows():
+    assert len(ROWS) == 21
 
 
 def test_covers_full_sport_x_category_matrix_once():
@@ -29,6 +29,7 @@ def test_covers_full_sport_x_category_matrix_once():
         | {("football", "odds_linebet")}
         | {("football", "odds_betwinner")}
         | {("football", "odds_1xbet_ke")}
+        | {("football", "ou")}
         | {("football", "lineups")}
     )
     assert pairs == expected
@@ -93,6 +94,12 @@ def test_param_sets_per_row():
             assert {"team_a", "team_b"} <= params
             assert "date" not in params and "team" not in params and "league" not in params
             continue
+        if row.category == "ou":
+            # Per-event detail path: caller passes the source event id and the
+            # team names (the AJAX payload carries neither).
+            assert {"event", "home", "away"} <= params
+            assert "date" not in params and "league" not in params
+            continue
         assert "league" in params
         if row.category in ("fixtures", "results"):
             assert {"date", "team"} <= params
@@ -150,7 +157,7 @@ def test_catalog_module_importable_lookup():
         "betwinner",
         "1xbet_ke",
     )
-    assert len(catalog.ROWS) == 20
+    assert len(catalog.ROWS) == 21
 
 
 def test_football_h2h_linebet_first():

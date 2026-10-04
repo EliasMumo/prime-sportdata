@@ -110,3 +110,13 @@ odds category. Catalog now 17 rows. Gates: pytest 189/9, ruff+mypy clean.
 Consumed by primepredict_algo (commit c7c6e98) as a supplement merged with
 Betika per-selection precedence; Production EXECUTION_BOOKMAKER_ALLOWLIST now
 includes linebet (betfair_ex_uk,williamhill,betika,linebet).
+
+## BetExplorer over/under detail path (2026-10-04)
+status: completed (owner build)
+check: live probe of /match-odds/{event}/1/ou/bestOdds/ — PASS (HTTP 200,
+430 KB, plain IPv4 curl, no session tokens; 66 bookmaker rows captured)
+check: offline pytest for the new `football/ou` catalog row — see
+tests/test_sources_betexplorer.py (parse + line-key + validation tests)
+Purpose: totals coverage for Argentine-league slates that ship no totals in
+the day-wide odds lists; consumed by primepredict_algo's sportdata client.
+Catalog now 21 rows.

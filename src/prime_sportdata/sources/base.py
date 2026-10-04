@@ -37,6 +37,7 @@ class SourceResponse:
     url: str
     status: int | None
     fetched_at: str
+    params: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

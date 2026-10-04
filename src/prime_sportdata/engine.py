@@ -124,6 +124,17 @@ _CLOSED = "closed"
 _OPEN = "open"
 _HALF_OPEN = "half_open"
 
+# Categories whose payloads are betting quotes: dispatched to ``parse_odds``
+# and given the short odds TTL (they age fast and feed downstream pricing).
+_ODDS_CATEGORIES: tuple[str, ...] = (
+    "odds",
+    "odds_detailed",
+    "odds_linebet",
+    "odds_betwinner",
+    "odds_1xbet_ke",
+    "ou",
+)
+
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -400,15 +411,12 @@ class Engine:
         envelope = self._fetch_uncached(sport, category, norm, order)
         if category == "live":
             ttl = self._ttl_live
-        elif category in (
-            "odds", "odds_detailed", "odds_linebet", "odds_betwinner", "odds_1xbet_ke"
-        ):
+        elif category in _ODDS_CATEGORIES:
             ttl = self._ttl_odds
         else:
             ttl = self._ttl_default
         if (
-            category
-            in ("odds", "odds_detailed", "odds_linebet", "odds_betwinner", "odds_1xbet_ke")
+            category in _ODDS_CATEGORIES
             # An empty odds answer is a source-rollover / cold-start symptom,
             # not a healthy empty day.  Caching it for the full odds TTL
             # replays emptiness to every caller (the daily publish retries
@@ -452,10 +460,7 @@ class Engine:
                         sport, category, source, norm, [], warnings=[exc.detail], started=started
                     )
                 try:
-                    if category in (
-                        "odds", "odds_detailed", "odds_linebet",
-                        "odds_betwinner", "odds_1xbet_ke",
-                    ):
+                    if category in _ODDS_CATEGORIES:
                         outcome: ParseOutcome = adapter.parse_odds(resp)
                     elif category == "lineups":
                         outcome = adapter.parse_lineups(resp)
@@ -575,7 +580,7 @@ class Engine:
                 limit=limit,
                 team_a=norm.get("team_a"),
                 team_b=norm.get("team_b"),
-                event_id=norm.get("event_id"),
+                event_id=norm.get("event") or norm.get("event_id"),
             ),
             warnings=list(warnings),
         )
@@ -595,9 +600,7 @@ class Engine:
                 home=H2HEntity(name=norm.get("entity_a") or ""),
                 away=H2HEntity(name=norm.get("entity_b") or ""),
             )
-        if category in (
-            "odds", "odds_detailed", "odds_linebet", "odds_betwinner", "odds_1xbet_ke"
-        ):
+        if category in _ODDS_CATEGORIES:
             return OddsPayload(quotes=list(quotes))
         if category == "lineups":
             if not events or not lineups:

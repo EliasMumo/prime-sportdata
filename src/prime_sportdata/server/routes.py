@@ -91,6 +91,12 @@ def _example_curl(row_sport: str, row_category: str, params: tuple[str, ...]) ->
         qs.append("team_a=Arsenal")
     if "team_b" in params:
         qs.append("team_b=Chelsea")
+    if "event" in params:
+        qs.append("event=E50wDhIl")
+    if "home" in params:
+        qs.append("home=Team+A")
+    if "away" in params:
+        qs.append("away=Team+B")
     if "league" in params:
         qs.append("league=Premier+League")
     qs.append(f"limit={LIMIT_DEFAULT}")
@@ -138,7 +144,7 @@ def _parse_row(sport: str, category: str) -> tuple[CatalogRow | None, JSONRespon
             f"unknown sport or category: /v1/{sport}/{category} "
             "(known sports: football, basketball, tennis; categories: "
             "fixtures, live, results, h2h, odds, odds_detailed, odds_linebet, "
-            "odds_betwinner, odds_1xbet_ke, lineups)",
+            "odds_betwinner, odds_1xbet_ke, ou, lineups)",
         )
     return row, None
 

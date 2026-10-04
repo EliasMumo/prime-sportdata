@@ -34,18 +34,46 @@ with jitter, ONLY on transport timeouts/errors and HTTP 5xx — never on
 engine breaker). One static realistic browser UA, no rotation, single host
 (``www.betexplorer.com``), sequential requests >= 1 s apart via the engine
 rate limiter.
+
+Over/under detail path (live-verified 2026-10-04)
+-------------------------------------------------
+The site's O/U tab on a match page does not serve the odds server-side: the
+``/over-under/`` URL 301s back to the match page. A browser session revealed
+the real AJAX endpoint behind the tab:
+
+    GET /match-odds/{EVENT}/1/ou/bestOdds/?lang=en
+
+which was then verified server-side over plain ``curl -4`` with the same
+static UA (HTTP 200, ~430 KB) and returns ``{"odds": "<html>"}``. Each
+bookmaker row carries the shape below (captured 2026-10-04):
+
+    <tr data-bid=... data-bookie-id=...>
+      <td class="h-text-left ...">... <a href="/bookmaker/...">1xBet</a> ...</td>
+      <td class="table-main__doubleparameter">0.5</td>
+      <td ... data-odd="1.12" ...> ... </td>   <- over price
+      <td ... data-odd="6.00" ...> ... </td>   <- under price
+    </tr>
+
+The endpoint payload carries no team names, kickoff, or league context, so
+home/away must be supplied by the caller as request params (the adapter never
+invents them). Quotes are emitted as ``market="total_{line}"`` with
+``prices={"over": ..., "under": ...}`` so downstream consumers can reuse the
+same total-line conventions as the betika adapter.
 """
 
 from __future__ import annotations
 
+import json
 import random
 import socket
 import threading
 import time
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from html import unescape
+from math import isclose
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -89,6 +117,10 @@ _JITTER_MAX_S = 0.8
 
 _SPORTS = ("football", "basketball", "tennis")
 _ODDS_CATEGORY = "odds"
+# Per-event over/under detail path (live-verified 2026-10-04, see module
+# docstring section "Over/under detail path"). One request per event.
+_OU_CATEGORY = "ou"
+_OU_PATH = "/match-odds/{event}/1/ou/bestOdds/"
 # Number of odds columns per sport on the verified main page: football = 1x2,
 # basketball/tennis = two-way home/away (verified 2026-09-08, see docstring).
 _MARKET_BY_SPORT: dict[str, tuple[str, tuple[str, ...]]] = {
@@ -156,6 +188,35 @@ def _market_for_sport(sport: str) -> tuple[str, tuple[str, ...]]:
         raise BadRequest(f"unknown sport {sport!r}", source="betexplorer") from None
 
 
+def _ou_event_id(url: str) -> str | None:
+    import re
+
+    match = re.search(r"/match-odds/([^/]+)/", url)
+    return match.group(1) if match else None
+
+
+def _ou_line_key(text: str) -> str | None:
+    """Normalized total line key (``2_5``) from a ``table-main__doubleparameter``.
+
+    Accepts quarter-aligned lines (0.25 steps) as served by the OU table and
+    emits the same convention as the betika totals path: ``2.5`` -> ``2_5``,
+    ``2`` -> ``2_0`` (integers always carry the ``_0`` suffix so the
+    single-digit-fraction consumers match them), ``2.25`` -> ``2_25``.
+    """
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    if not 0.0 < value <= 15.0:
+        return None
+    quarters = round(value * 4)
+    if not isclose(quarters / 4, value, abs_tol=1e-9):
+        return None  # not a quarter-aligned line
+    whole = int(value)
+    frac_digits = ("0", "25", "5", "75")[quarters - whole * 4]
+    return f"{whole}_{frac_digits}"
+
+
 class BetexplorerAdapter(SourceAdapter):
     """BetExplorer odds adapter: plain-httpx IPv4 client, static UA, typed errors."""
 
@@ -167,6 +228,8 @@ class BetexplorerAdapter(SourceAdapter):
         sport, category = str(sport), str(category)
         if sport not in _SPORTS:
             raise BadRequest(f"unknown sport {sport!r}", source=self.source)
+        if category == _OU_CATEGORY:
+            return self._fetch_ou(sport, params)
         if category != _ODDS_CATEGORY:
             raise NotFound(
                 f"betexplorer ships an odds-only data path; no verified {category!r} "
@@ -199,6 +262,8 @@ class BetexplorerAdapter(SourceAdapter):
 
     def parse_odds(self, resp: SourceResponse) -> ParseOutcome:
         """Parse the server-rendered odds table into normalized quotes."""
+        if "/match-odds/" in (resp.url or ""):
+            return self._parse_ou_odds(resp)
         if not isinstance(resp.payload, (str, bytes)):
             raise NoData(
                 f"betexplorer payload must be HTML text, got "
@@ -242,6 +307,135 @@ class BetexplorerAdapter(SourceAdapter):
         return ParseOutcome(quotes=quotes, warnings=warnings)
 
     # -- internals ----------------------------------------------------------
+
+    def _fetch_ou(self, sport: str, params: Mapping[str, str]) -> SourceResponse:
+        """Per-event over/under request (football-only, live-verified path)."""
+        if sport != "football":
+            raise NotFound(
+                f"betexplorer over/under detail path is football-only "
+                f"(sport={sport} has no verified endpoint)",
+                source=self.source,
+            )
+        event = (params.get("event") or "").strip()
+        home = (params.get("home") or "").strip()
+        away = (params.get("away") or "").strip()
+        if not event or not home or not away:
+            raise BadRequest(
+                "betexplorer over/under requires event/home/away params "
+                "(the endpoint payload carries no team names)",
+                source=self.source,
+            )
+        url = f"{BASE_URL}{_OU_PATH.format(event=event)}?lang=en"
+        resp = self._request(url)
+        return replace(resp, params={"event": event, "home": home, "away": away})
+
+    def _parse_ou_odds(self, resp: SourceResponse) -> ParseOutcome:
+        """Parse the match-odds JSON envelope into over/under quotes."""
+        if not isinstance(resp.payload, (str, bytes)):
+            raise NoData(
+                f"betexplorer over/under payload must be JSON text, got "
+                f"{type(resp.payload).__name__}",
+                source=resp.source,
+            )
+        text = resp.payload.decode("utf-8", errors="replace") if isinstance(resp.payload, bytes) else resp.payload
+        try:
+            envelope = json.loads(text)
+            html = str(envelope["odds"])
+        except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise NoData(f"unusable over/under envelope: {exc!r}", source=resp.source) from exc
+        event_id = _ou_event_id(resp.url)
+        home = (resp.params.get("home") or "").strip()
+        away = (resp.params.get("away") or "").strip()
+        if not event_id or not home or not away:
+            raise NoData(
+                "cannot anchor over/under quotes: event id or team names missing",
+                source=resp.source,
+            )
+        warnings: list[str] = [
+            parse_warning(
+                "over/under comparison table served by an AJAX endpoint discovered "
+                "via a browser session (2026-10-04); shape may change without notice",
+                resp,
+            ),
+            parse_warning(
+                "over/under rows are aggregator odds-comparison entries per "
+                "bookmaker; observed market evidence, not an execution feed",
+                resp,
+            ),
+            parse_warning(
+                "endpoint payload carries no team names; home/away come from "
+                "caller-supplied params",
+                resp,
+            ),
+        ]
+        quotes: list[OddsQuote] = []
+        skipped: dict[str, int] = {}
+        for row in _iter_rows(html):
+            try:
+                quote = self._normalize_ou_row(row, event_id, home, away, resp)
+            except _SkipRow as exc:
+                reason = str(exc)
+                skipped[reason] = skipped.get(reason, 0) + 1
+                continue
+            if quote is not None:
+                quotes.append(quote)
+        for reason, count in sorted(skipped.items()):
+            warnings.append(parse_warning(f"skipped {count} row(s): {reason}", resp))
+        return ParseOutcome(quotes=quotes, warnings=warnings)
+
+    @staticmethod
+    def _normalize_ou_row(
+        row: str,
+        event_id: str,
+        home: str,
+        away: str,
+        resp: SourceResponse,
+    ) -> OddsQuote | None:
+        if "table-main__doubleparameter" not in row:
+            return None
+        import re
+
+        line_match = re.search(
+            r'table-main__doubleparameter[^>]*>(.*?)</td>',
+            row,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
+        if line_match is None:
+            raise _SkipRow("no total line cell")
+        line_text = unescape(re.sub(r"<[^>]+>", "", line_match.group(1))).strip()
+        line_key = _ou_line_key(line_text)
+        if line_key is None:
+            raise _SkipRow(f"unusable total line {line_text!r}")
+        prices_raw = re.findall(r'data-odd="([^"]+)"', row)
+        if len(prices_raw) != 2:
+            raise _SkipRow(f"expected 2 over/under prices, found {len(prices_raw)}")
+        try:
+            over, under = float(prices_raw[0]), float(prices_raw[1])
+        except ValueError:
+            raise _SkipRow("non-numeric over/under price") from None
+        if not (over > 1.0 and under > 1.0):
+            raise _SkipRow("over/under price is not a valid decimal > 1")
+        name_match = re.search(r"<a\b[^>]*>(.*?)</a>", row, flags=re.DOTALL | re.IGNORECASE)
+        if name_match is None:
+            raise _SkipRow("no bookmaker cell")
+        bookmaker = unescape(re.sub(r"<[^>]+>", "", name_match.group(1))).strip()
+        if not bookmaker:
+            raise _SkipRow("empty bookmaker name")
+        return OddsQuote(
+            sport="football",
+            external=ExternalRef(
+                source=resp.source,
+                source_event_id=event_id,
+                source_url=resp.url,
+            ),
+            start_time_utc=None,
+            home=unescape(home),
+            away=unescape(away),
+            competition=None,
+            market=f"total_{line_key}",
+            bookmaker=bookmaker,
+            prices={"over": over, "under": under},
+        )
 
     @staticmethod
     def _sport_from_url(url: str) -> str:

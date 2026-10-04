@@ -63,6 +63,10 @@ LINEUPS_PARAMS: tuple[str, ...] = ("team_a", "team_b", "limit")
 # Betika serves its own upcoming list; no verified date filter, so the
 # detailed category takes league/limit only (caller-side filtering warning).
 ODDS_DETAILED_PARAMS: tuple[str, ...] = ("league", "limit")
+# Per-event over/under detail path (betexplorer match-odds AJAX, live-verified
+# 2026-10-04): callers resolve the betexplorer event id from the main-page odds
+# quote and pass home/away (the endpoint payload carries no team names).
+OU_PARAMS: tuple[str, ...] = ("event", "home", "away", "limit")
 
 LIMIT_DEFAULT = 50
 # Flashscore day feeds are league-alphabetical and hold 1,700+ events on
@@ -105,6 +109,9 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("tennis", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, ("betika", "linebet")),
     CatalogRow("football", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
+    # Per-event over/under totals for fixtures the day-wide odds lists miss
+    # (e.g. Argentine-league slates with no betika totals quotes).
+    CatalogRow("football", "ou", OU_PARAMS, BETEXPLORER_ODDS),
     # 1xBet-family siblings with explicit rows (probe-verified 2026-09-24).
     CatalogRow("football", "odds_betwinner", ODDS_DETAILED_PARAMS, ("betwinner",)),
     CatalogRow("football", "odds_1xbet_ke", ODDS_DETAILED_PARAMS, ("1xbet_ke",)),

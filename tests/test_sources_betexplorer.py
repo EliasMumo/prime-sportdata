@@ -181,3 +181,129 @@ def test_parse_tournament_without_country() -> None:
 
 def test_parse_tournament_missing_returns_none() -> None:
     assert _parse_tournament("<tr><td>no anchor</td></tr>") is None
+
+
+# --- over/under detail path (live-verified 2026-10-04) -----------------------
+
+
+def _ou_response(odds_html: str, params: dict[str, str] | None = None) -> SourceResponse:
+    import json
+
+    payload = json.dumps({"odds": odds_html})
+    return SourceResponse(
+        source="betexplorer",
+        payload=payload,
+        url="https://www.betexplorer.com/match-odds/8p61npDl/1/ou/bestOdds/?lang=en",
+        status=200,
+        fetched_at="2026-10-04T07:30:00+00:00",
+        params=params or {"event": "8p61npDl", "home": "Newells Old Boys", "away": "Lanus"},
+    )
+
+
+def _ou_bookmaker_row(bookmaker: str, line: str, over: str, under: str) -> str:
+    return (
+        '<tr data-bo="true" data-bid="417" data-bookie-id="1039">'
+        f'<td class="h-text-left over-s-only h-text-pl10">'
+        f'<a href="/bookmaker/1039/redirect">{bookmaker}</a></td>'
+        '<td class="h-text-left under-s-only h-text-pl10"></td>'
+        '<td class="h-text-left tablet-desktop-only"></td>'
+        f'<td class="table-main__doubleparameter">{line}</td>'
+        f'<td class="table-main__detail-odds" data-odd="{over}"></td>'
+        f'<td class="table-main__detail-odds" data-odd="{under}"></td>'
+        "</tr>"
+    )
+
+
+def test_parse_ou_odds_normalizes_bookmaker_rows(adapter: BetexplorerAdapter) -> None:
+    html = (
+        "<table>"
+        + _ou_bookmaker_row("1xBet", "2.5", "2.74", "1.45")
+        + _ou_bookmaker_row("22Bet", "2.5", "2.74", "1.45")
+        + _ou_bookmaker_row("Stake.com", "0.5", "1.12", "6.00")
+        + "</table>"
+    )
+    outcome = adapter.parse_odds(_ou_response(html))
+    assert len(outcome.quotes) == 3
+    first = outcome.quotes[0]
+    assert first.market == "total_2_5"
+    assert first.prices == {"over": 2.74, "under": 1.45}
+    assert first.bookmaker == "1xBet"
+    assert first.home == "Newells Old Boys"
+    assert first.away == "Lanus"
+    assert first.external.source == "betexplorer"
+    assert first.external.source_event_id == "8p61npDl"
+    assert first.external.source_url.endswith("/1/ou/bestOdds/?lang=en")
+    assert first.start_time_utc is None
+    assert outcome.quotes[2].market == "total_0_5"
+    assert outcome.quotes[2].prices == {"over": 1.12, "under": 6.00}
+    assert any("AJAX endpoint" in w for w in outcome.warnings)
+    assert any("home/away come from" in w for w in outcome.warnings)
+
+
+def test_parse_ou_odds_skips_malformed_rows(adapter: BetexplorerAdapter) -> None:
+    html = (
+        "<table>"
+        + _ou_bookmaker_row("1xBet", "2.5", "2.74", "1.45")
+        # wrong price count: parsed prices length != 2
+        + '<tr><td class="table-main__doubleparameter">2.5</td>'
+        '<td data-odd="1.80"></td><td data-odd="0.90"></td><td data-odd="2.10"></td></tr>'
+        # invalid price <= 1.0
+        + _ou_bookmaker_row("BadBook", "2.5", "0.90", "1.45")
+        # unusable line
+        + _ou_bookmaker_row("OddBook", "two and a half", "2.74", "1.45")
+        + "</table>"
+    )
+    outcome = adapter.parse_odds(_ou_response(html))
+    assert len(outcome.quotes) == 1
+    assert outcome.quotes[0].bookmaker == "1xBet"
+    assert any("found 3" in w for w in outcome.warnings)
+    assert any("not a valid decimal" in w for w in outcome.warnings)
+    assert any("unusable total line" in w for w in outcome.warnings)
+
+
+def test_parse_ou_odds_rejects_non_json_payload(adapter: BetexplorerAdapter) -> None:
+    from prime_sportdata.errors import NoData
+
+    resp = SourceResponse(
+        source="betexplorer",
+        payload="<html>not json</html>",
+        url="https://www.betexplorer.com/match-odds/8p61npDl/1/ou/bestOdds/",
+        status=200,
+        fetched_at="2026-10-04T07:30:00+00:00",
+        params={"event": "8p61npDl", "home": "A", "away": "B"},
+    )
+    with pytest.raises(NoData):
+        adapter.parse_odds(resp)
+
+
+def test_ou_line_key_conversions() -> None:
+    from prime_sportdata.sources.betexplorer import _ou_line_key
+
+    assert _ou_line_key("0.5") == "0_5"
+    assert _ou_line_key("2") == "2_0"
+    assert _ou_line_key("2.5") == "2_5"
+    assert _ou_line_key("3.5") == "3_5"
+    assert _ou_line_key("2.25") == "2_25"
+    assert _ou_line_key("2.75") == "2_75"
+    assert _ou_line_key("2.20") is None  # not quarter-aligned
+    assert _ou_line_key("abc") is None
+    assert _ou_line_key("0") is None
+    assert _ou_line_key("99") is None
+
+
+def test_fetch_ou_requires_event_and_teams(adapter: BetexplorerAdapter) -> None:
+    from prime_sportdata.errors import BadRequest
+
+    with pytest.raises(BadRequest):
+        adapter.fetch("football", "ou", {})
+    with pytest.raises(BadRequest):
+        adapter.fetch("football", "ou", {"event": "8p61npDl"})
+    with pytest.raises(BadRequest):
+        adapter.fetch("football", "ou", {"event": "8p61npDl", "home": "A"})
+    with pytest.raises(BadRequest):
+        adapter.fetch("football", "ou", {"event": "8p61npDl", "away": "B"})
+
+
+def test_fetch_ou_football_only(adapter: BetexplorerAdapter) -> None:
+    with pytest.raises(NotFound):
+        adapter.fetch("basketball", "ou", {"event": "x", "home": "A", "away": "B"})
