@@ -501,7 +501,7 @@ def test_fetch_lineups_resolves_shared_event(
         if "/search/all" in url:
             payload = search_b if "Tottenham" in url else search_a
         elif "/events/next/0" in url:
-            payload = pages[url.split("www.sofascore.com/api/v1")[1]]
+            payload = pages[url.split("api.sofascore.com/api/v1")[1]]
         else:
             payload = lineups_bytes
         return SourceResponse(

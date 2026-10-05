@@ -35,9 +35,11 @@ Verified data paths (200 + parsed this session; recorded fixtures under
 ``tests/fixtures/sofascore/``):
 
 * ``GET www.sofascore.com/api/v1/sport/{football|basketball|tennis}/events/live``
-* ``GET www.sofascore.com/api/v1/team/{team_id}/events/next/0`` (fixtures)
-* ``GET www.sofascore.com/api/v1/team/{team_id}/events/last/0`` (results)
-* ``GET www.sofascore.com/api/v1/search/all?q={q}`` (team resolution)
+* ``GET api.sofascore.com/api/v1/team/{team_id}/events/next/0`` (fixtures)
+* ``GET api.sofascore.com/api/v1/team/{team_id}/events/last/0`` (results)
+* ``GET api.sofascore.com/api/v1/search/all?q={q}`` (team resolution;
+  re-hosted 2026-10-05 after www.sofascore.com started serving a TLS
+  certificate with a hostname mismatch on the API path)
 
 Retry discipline (SPEC Ban-risk policy): max 2 retries, exponential backoff
 with jitter, ONLY on transport timeouts/errors and HTTP 5xx — never on
@@ -245,7 +247,7 @@ class SofascoreAdapter(SourceAdapter):
             raise self._no_team(sport, category)
         team_id = self._resolve_team(sport, team)
         page = "next/0" if category == "fixtures" else "last/0"
-        return self._request(f"{BASE_WWW}/team/{team_id}/events/{page}")
+        return self._request(f"{BASE_API}/team/{team_id}/events/{page}")
 
     def parse_events(self, resp: SourceResponse) -> ParseOutcome:
         data = parse_json_response(resp)
@@ -302,7 +304,7 @@ class SofascoreAdapter(SourceAdapter):
             raise BadRequest("football lineups requires team_a and team_b", source=self.source)
         id_a = self._resolve_team(sport, team_a)
         id_b = self._resolve_team(sport, team_b)
-        events_url = f"{BASE_WWW}/team/{{team_id}}/events/next/0"
+        events_url = f"{BASE_API}/team/{{team_id}}/events/next/0"
         resp_a = self._request(events_url.format(team_id=id_a))
         resp_b = self._request(events_url.format(team_id=id_b))
         page_a = parse_json_response(resp_a)
@@ -414,7 +416,7 @@ class SofascoreAdapter(SourceAdapter):
         payload marks them as the requested sport (``type == 0`` + sport slug)
         are candidates — never a wrong-sport guess.
         """
-        url = f"{BASE_WWW}/search/all?{httpx.QueryParams({'q': team})}"
+        url = f"{BASE_API}/search/all?{httpx.QueryParams({'q': team})}"
         resp = self._request(url)
         data = parse_json_response(resp)
         results = data.get("results") if isinstance(data, dict) else None
