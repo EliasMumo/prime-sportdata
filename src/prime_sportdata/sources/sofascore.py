@@ -8,14 +8,14 @@ rows, never a parse of an unverified shape.
 
 Network realities recorded that session
 ---------------------------------------
-* IPv6 toward sofascore hosts blackholes on this network; the DNS A records
-  served on 2026-09-02 for both hosts (151.101.3.52/.67.52/.131.52/.195.52)
-  also time out at TCP, while ``151.101.175.52`` (the A record that answered
-  the SPEC evidence probe earlier that day) answers both ``www.sofascore.com``
-  and ``api.sofascore.com``. The adapter therefore (a) forces AF_INET and
-  (b) tries the session-verified fallback address first, then live DNS
-  results. Both shims are scoped to sofascore hostnames only so the rest of
-  the process is unaffected.
+* IPv6 toward sofascore hosts blackholes on this network.  On 2026-09-02 the
+  DNS A records (151.101.3.52/.67.52/.131.52/.195.52) timed out at TCP while
+  ``151.101.175.52`` answered both hosts.  On 2026-10-05 both hostnames
+  resolve to ``140.248.171.52`` and the old fallback IP serves a mismatched
+  TLS certificate (CERTIFICATE_VERIFY_FAILED) — the fallback-first shim now
+  tries the current address, then the old one, then live DNS results.  Both
+  shims are scoped to sofascore hostnames only so the rest of the process is
+  unaffected.
 * Date-global schedule endpoints (``/sport/{sport}/scheduled-events/{date}``,
   ``/sport/{sport}/events/{date}``, ``/sport/{sport}/finished-events/{date}``)
   return HTTP 404 on both hosts for all three sports — this API version no
@@ -96,10 +96,12 @@ _HEADERS: dict[str, str] = {
 BASE_WWW = "https://www.sofascore.com/api/v1"
 BASE_API = "https://api.sofascore.com/api/v1"
 
-# Session-verified IPv4 route to both hosts (2026-09-02; DNS answers for both
-# hostnames currently time out from this network — see module docstring and
-# docs/source-health.md). Tried first, live DNS results follow as fallbacks.
-SOFASCORE_IPV4_FALLBACKS: tuple[str, ...] = ("151.101.175.52",)
+# Session-verified IPv4 routes (2026-10-05): both hostnames now resolve to
+# 140.248.171.52; the previous Fastly IP (151.101.175.52, verified
+# 2026-09-02) now serves a different certificate and dialing it produced
+# CERTIFICATE_VERIFY_FAILED hostname-mismatch errors for both hosts.
+# Current address first, live DNS results follow as fallbacks.
+SOFASCORE_IPV4_FALLBACKS: tuple[str, ...] = ("140.248.171.52", "151.101.175.52")
 _SOFASCORE_HOSTS: frozenset[str] = frozenset({"www.sofascore.com", "api.sofascore.com"})
 
 CONNECT_TIMEOUT_S = 10.0
@@ -142,12 +144,12 @@ def _sofascore_getaddrinfo(
     """getaddrinfo replacement active while a sofascore request is in flight.
 
     For sofascore hosts only: answers AF_INET results with the session-
-    verified fallback address first and live DNS results after (deduplicated),
-    because IPv6 and the DNS answers of 2026-09-02 blackhole on this network
-    while ``151.101.175.52`` answers. Any caller-supplied address family is
-    overridden (positional or keyword form — sync httpx/httpcore passes it
-    positionally via ``socket.create_connection``). Non-sofascore hosts are
-    delegated untouched so the shim has no global side effects.
+    verified fallback addresses first and live DNS results after
+    (deduplicated), because IPv6 and stale DNS answers blackhole or serve
+    mismatched certificates on this network. Any caller-supplied address
+    family is overridden (positional or keyword form — sync httpx/httpcore
+    passes it positionally via ``socket.create_connection``). Non-sofascore
+    hosts are delegated untouched so the shim has no global side effects.
     """
     if host not in _SOFASCORE_HOSTS:
         return _real_getaddrinfo(host, port, *args, **kwargs)
