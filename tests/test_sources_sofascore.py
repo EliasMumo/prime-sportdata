@@ -296,9 +296,9 @@ def test_shim_force_ipv4_fallback_first_and_dedup(monkeypatch: pytest.MonkeyPatc
     assert all(r[0] == socket.AF_INET for r in results)
     assert results[0][4] == (SOFASCORE_IPV4_FALLBACKS[0], 443)
     ips = [r[4][0] for r in results]
-    assert "151.101.175.52" in ips
+    assert "151.101.175.52" in ips  # previous fallback kept as secondary
     assert len(ips) == len(set(ips))  # deduplicated
-    assert results[1][4][0] == "www.sofascore.com"  # live DNS result follows
+    assert results[len(SOFASCORE_IPV4_FALLBACKS)][4][0] == "www.sofascore.com"  # live DNS results follow
 
 
 def test_shim_keyword_family_override(monkeypatch: pytest.MonkeyPatch) -> None:
