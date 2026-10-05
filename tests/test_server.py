@@ -176,11 +176,11 @@ def test_v1_unknown_source_pinning_is_400(tmp_path: Path) -> None:
 
 
 # --- /catalog -----------------------------------------------------------------
-def test_catalog_lists_all_20_rows_with_params_and_curl(client: TestClient) -> None:
+def test_catalog_lists_all_21_rows_with_params_and_curl(client: TestClient) -> None:
     resp = client.get("/catalog")
     assert resp.status_code == 200
     rows = resp.json()
-    assert len(rows) == 21
+    assert len(rows) == 22
     sports = {row["sport"] for row in rows}
     categories = {row["category"] for row in rows}
     assert sports == {"football", "basketball", "tennis"}
@@ -196,6 +196,7 @@ def test_catalog_lists_all_20_rows_with_params_and_curl(client: TestClient) -> N
         "odds_1xbet_ke",
         "ou",
         "lineups",
+        "match_summary",
     }
     for row in rows:
         assert row["params"] and row["sources"] and row["limit_default"] == 50

@@ -99,6 +99,7 @@ from prime_sportdata.models import (
     H2HPayload,
     Lineups,
     LineupsPayload,
+    MatchSummaryPayload,
     Meta,
     OddsPayload,
     OddsQuote,
@@ -138,6 +139,13 @@ _ODDS_CATEGORIES: tuple[str, ...] = (
 
 def _utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _int_or_none(value: str | None) -> int | None:
+    if value is None:
+        return None
+    text = value.strip()
+    return int(text) if text.isdigit() else None
 
 
 @dataclass(frozen=True)
@@ -464,6 +472,12 @@ class Engine:
                         outcome: ParseOutcome = adapter.parse_odds(resp)
                     elif category == "lineups":
                         outcome = adapter.parse_lineups(resp)
+                    elif category == "match_summary":
+                        outcome = adapter.parse_match_summary(
+                            resp,
+                            home_score=_int_or_none(norm.get("home_score")),
+                            away_score=_int_or_none(norm.get("away_score")),
+                        )
                     else:
                         outcome = adapter.parse_events(resp)
                 except PrimeSportDataError as exc:
@@ -510,6 +524,7 @@ class Engine:
                 events,
                 quotes,
                 lineups=outcome.lineups,
+                summary=outcome.summary,
                 warnings=warnings,
                 started=started,
             )
@@ -555,11 +570,12 @@ class Engine:
         quotes: Sequence[OddsQuote] = (),
         *,
         lineups: dict[str, Any] | None = None,
+        summary: MatchSummaryPayload | None = None,
         warnings: Sequence[str],
         started: float,
     ) -> Envelope:
         latency_ms = max(0, int((self._clock() - started) * 1000))
-        data = self._data_payload(category, norm, events, quotes, lineups)
+        data = self._data_payload(category, norm, events, quotes, lineups, summary)
         limit: int | None = None
         raw_limit = norm.get("limit")
         if raw_limit is not None:
@@ -593,6 +609,7 @@ class Engine:
         events: Sequence[Event],
         quotes: Sequence[OddsQuote] = (),
         lineups: dict[str, Any] | None = None,
+        summary: MatchSummaryPayload | None = None,
     ) -> EnvelopeData:
         if category == "h2h":
             return H2HPayload(
@@ -609,6 +626,13 @@ class Engine:
                     "content unusable)"
                 )
             return LineupsPayload(event=events[0], lineups=Lineups.model_validate(lineups))
+        if category == "match_summary":
+            if summary is None:
+                raise NoData(
+                    "match_summary parse produced no verified period lines "
+                    "(source answered, content unusable)"
+                )
+            return summary
         return EventsPayload(events=list(events))
 
     def _envelope_from_cache(self, sport: str, category: str, payload: dict[str, Any]) -> Envelope:

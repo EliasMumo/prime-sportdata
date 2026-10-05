@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 from prime_sportdata.errors import NoData
-from prime_sportdata.models import Event, ExternalRef, OddsQuote
+from prime_sportdata.models import Event, ExternalRef, MatchSummaryPayload, OddsQuote
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,7 @@ class ParseOutcome:
     events: list[Event] = field(default_factory=list)
     quotes: list[OddsQuote] = field(default_factory=list)
     lineups: dict[str, Any] | None = None  # set only by parse_lineups
+    summary: MatchSummaryPayload | None = None  # set only by parse_match_summary
     warnings: list[str] = field(default_factory=list)
 
 

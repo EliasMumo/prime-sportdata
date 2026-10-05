@@ -1,6 +1,7 @@
-"""Sport x category catalog: 18 rows (odds 2026-09-08, odds_detailed Betika
-2026-09-08, odds_linebet 2026-09-09, lineups 2026-09-20), per-row query
-params and default source failover orders (SPEC "Failover order").
+"""Sport x category catalog: 19 rows (odds 2026-09-08, odds_detailed Betika
+2026-09-08, odds_linebet 2026-09-09, lineups 2026-09-20, match_summary
+flashscore 2026-10-05), per-row query params and default source failover
+orders (SPEC "Failover order").
 
 Order rationale (documented so later stages can re-decide via override):
 
@@ -67,6 +68,11 @@ ODDS_DETAILED_PARAMS: tuple[str, ...] = ("league", "limit")
 # 2026-10-04): callers resolve the betexplorer event id from the main-page odds
 # quote and pass home/away (the endpoint payload carries no team names).
 OU_PARAMS: tuple[str, ...] = ("event", "home", "away", "limit")
+# Per-event half-time score summary (flashscore df_su_1_<id>, live-verified
+# 2026-10-05): callers pass the flashscore source event id plus the final
+# score so the adapter can refuse to ship period lines that do not sum to
+# the finals (SPEC: never ship unverified period detail).
+MATCH_SUMMARY_PARAMS: tuple[str, ...] = ("event", "home_score", "away_score", "limit")
 
 LIMIT_DEFAULT = 50
 # Flashscore day feeds are league-alphabetical and hold 1,700+ events on
@@ -112,6 +118,8 @@ ROWS: tuple[CatalogRow, ...] = (
     # Per-event over/under totals for fixtures the day-wide odds lists miss
     # (e.g. Argentine-league slates with no betika totals quotes).
     CatalogRow("football", "ou", OU_PARAMS, BETEXPLORER_ODDS),
+    # Per-event verified half-time/period score lines (2026-10-05).
+    CatalogRow("football", "match_summary", MATCH_SUMMARY_PARAMS, ("flashscore",)),
     # 1xBet-family siblings with explicit rows (probe-verified 2026-09-24).
     CatalogRow("football", "odds_betwinner", ODDS_DETAILED_PARAMS, ("betwinner",)),
     CatalogRow("football", "odds_1xbet_ke", ODDS_DETAILED_PARAMS, ("1xbet_ke",)),

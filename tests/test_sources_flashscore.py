@@ -47,6 +47,49 @@ def load(name: str, url: str) -> SourceResponse:
     )
 
 
+# --- match_summary (df_su_1_<id>, live-verified 2026-10-05) -------------------
+
+SUMMARY_URL = "https://2.flashscore.ninja/2/x/feed/df_su_1_O6KrS6uP"
+
+
+def test_parse_match_summary_ships_validated_half_lines(adapter: fs.FlashscoreAdapter) -> None:
+    resp = load("summary/df_su_1_O6KrS6uP.txt", SUMMARY_URL)
+    outcome = adapter.parse_match_summary(resp, home_score=5, away_score=2)
+    assert outcome.summary is not None
+    lines = outcome.summary.score_lines
+    assert [line.period_label for line in lines] == ["H1", "H2"]
+    assert lines[0].home == 4 and lines[0].away == 0
+    assert lines[1].home == 1 and lines[1].away == 2
+    assert any("cross-validated" in warning for warning in outcome.warnings)
+
+
+def test_parse_match_summary_rejects_mismatched_finals(adapter: fs.FlashscoreAdapter) -> None:
+    resp = load("summary/df_su_1_O6KrS6uP.txt", SUMMARY_URL)
+    with pytest.raises(NoData, match="do not match"):
+        adapter.parse_match_summary(resp, home_score=4, away_score=2)
+
+
+def test_parse_match_summary_rejects_missing_half_sections(adapter: fs.FlashscoreAdapter) -> None:
+    resp = SourceResponse(
+        source="flashscore",
+        payload=b"no sections here",  # synthetic: no AC/IG/IH chunks
+        url=SUMMARY_URL,
+        status=200,
+        fetched_at=FETCHED_AT,
+    )
+    with pytest.raises(NoData, match="no 1st Half"):
+        adapter.parse_match_summary(resp, home_score=1, away_score=0)
+
+
+def test_fetch_match_summary_requires_event_and_finals(adapter: fs.FlashscoreAdapter) -> None:
+    with pytest.raises(BadRequest, match="event id"):
+        adapter.fetch("football", "match_summary", {})
+    with pytest.raises(BadRequest, match="home_score"):
+        adapter.fetch(
+            "football", "match_summary", {"event": "O6KrS6uP"}
+        )
+
+
 @pytest.fixture()
 def adapter() -> fs.FlashscoreAdapter:
     return fs.FlashscoreAdapter()

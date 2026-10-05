@@ -23,6 +23,7 @@ Category = Literal[
     "odds_1xbet_ke",
     "ou",
     "lineups",
+    "match_summary",
 ]
 EventStatus = Literal["scheduled", "live", "finished", "postponed", "cancelled", "interrupted"]
 
@@ -184,7 +185,22 @@ class LineupsPayload(BaseModel):
     lineups: Lineups
 
 
-EnvelopeData = EventsPayload | H2HPayload | OddsPayload | LineupsPayload
+class MatchSummaryPayload(BaseModel):
+    """Envelope data for match_summary queries: validated period score lines.
+
+    Carries only period lines the source verified (flashscore ``df_su_1_<id>``
+    per-event summary, live-verified 2026-10-05): H1/H2 goal splits that sum
+    exactly to the finals the caller supplied for cross-validation.  No team/
+    competition fields — the summary feed ships none, and the SPEC forbids
+    guessing them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    score_lines: list[ScoreLine] = []
+
+
+EnvelopeData = EventsPayload | H2HPayload | OddsPayload | LineupsPayload | MatchSummaryPayload
 
 
 class RequestParams(BaseModel):

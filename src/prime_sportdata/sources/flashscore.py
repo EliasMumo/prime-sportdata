@@ -95,6 +95,7 @@ from prime_sportdata.models import (
     Event,
     EventStatus,
     ExternalRef,
+    MatchSummaryPayload,
     ScoreLine,
     Sport,
     Team,
@@ -125,7 +126,7 @@ _HEADERS: dict[str, str] = {
 FEED_BASE = "https://2.flashscore.ninja/2/x/feed"
 
 _SPORTS: tuple[Sport, ...] = ("football", "tennis", "basketball")
-_CATEGORIES = ("fixtures", "live", "results", "h2h")
+_CATEGORIES = ("fixtures", "live", "results", "h2h", "match_summary")
 _SPORT_IDS: dict[str, int] = {"football": 1, "tennis": 2, "basketball": 3}
 _SPORT_BY_ID: dict[str, Sport] = {"1": "football", "2": "tennis", "3": "basketball"}
 # Day-feed shape suffix; only day offsets within VERIFIED_DAY_OFFSETS may be
@@ -252,6 +253,9 @@ class FlashscoreAdapter(SourceAdapter):
             raise BadRequest(f"unknown category {category!r}", source=self.source)
         if category == "h2h":
             raise self._h2h_unavailable()
+        if category == "match_summary":
+            event_id, _, _ = self._summary_params(params)
+            return self._request(f"{FEED_BASE}/df_su_1_{event_id}")
         if category == "live":
             offset = 0  # live is "right now" -> the current Prague day doc
         else:
@@ -323,6 +327,100 @@ class FlashscoreAdapter(SourceAdapter):
         return ParseOutcome(events=stamp_provenance(resp, events), warnings=warnings)
 
     # -- fetch internals ----------------------------------------------------
+
+    @staticmethod
+    def _summary_params(params: Any) -> tuple[str, int, int]:
+        """(event_id, home_score, away_score) validated from the request.
+
+        The finals are a required cross-validation input: the summary feed
+        carries per-half goal counts but no final score of its own, and the
+        SPEC forbids shipping period lines that cannot be reproduced from
+        the caller-verified final.
+        """
+        get = params.get if hasattr(params, "get") else None
+        if get is None:
+            raise BadRequest(
+                "match_summary params must be a mapping", source="flashscore"
+            )
+        event_id = str(get("event") or "").strip()
+        if not event_id:
+            raise BadRequest(
+                "match_summary requires the flashscore source event id",
+                source="flashscore",
+            )
+        home = _as_int(str(get("home_score")))
+        away = _as_int(str(get("away_score")))
+        if home is None or away is None:
+            raise BadRequest(
+                "match_summary requires integer home_score and away_score to "
+                "cross-validate the period sums",
+                source="flashscore",
+            )
+        return event_id, home, away
+
+    def parse_match_summary(
+        self, resp: SourceResponse, *, home_score: int | None, away_score: int | None
+    ) -> ParseOutcome:
+        """Parse the per-event summary feed into validated H1/H2 lines.
+
+        ``df_su_1_<eventId>`` (live-verified 2026-10-05: The Strongest vs
+        Universitario de Vinto, O6KrS6uP) carries per-half goal counts
+        (``AC`` section label + ``IG``/``IH`` integers).  Lines ship only
+        when the half sums reproduce the caller-provided final score
+        exactly — otherwise ``NoData`` with the evidence.  Never a guessed
+        period line.
+        """
+        if home_score is None or away_score is None:
+            raise NoData(
+                "match_summary requires integer home_score/away_score to "
+                "validate period sums",
+                source=resp.source,
+            )
+        text = self._decode_payload(resp)
+        halves: dict[str, tuple[int, int]] = {}
+        for chunk in text.split("~"):
+            fields = _split_fields(chunk)
+            label = (fields.get("AC") or "").strip()
+            if label not in ("1st Half", "2nd Half", "Extra Time", "Penalties"):
+                continue
+            ig, ih = _as_int(fields.get("IG")), _as_int(fields.get("IH"))
+            if ig is None or ih is None:
+                raise NoData(
+                    f"summary section {label!r} lacks integer IG/IH goal counts",
+                    source=resp.source,
+                )
+            halves[label] = (ig, ih)
+        if "1st Half" not in halves:
+            raise NoData(
+                "summary feed has no 1st Half section (no verified half-time score)",
+                source=resp.source,
+            )
+        first = halves["1st Half"]
+        second = halves.get("2nd Half")
+        home_sum = first[0] + (second[0] if second is not None else 0)
+        away_sum = first[1] + (second[1] if second is not None else 0)
+        if home_sum != home_score or away_sum != away_score:
+            second_text = f", 2nd {second[0]}-{second[1]}" if second is not None else ""
+            raise NoData(
+                "summary period sums do not match the caller-provided finals: "
+                f"1st {first[0]}-{first[1]}{second_text} sums to "
+                f"{home_sum}-{away_sum}, finals {home_score}-{away_score}",
+                source=resp.source,
+            )
+        lines = [ScoreLine(period_label="H1", home=first[0], away=first[1])]
+        if second is not None:
+            lines.append(ScoreLine(period_label="H2", home=second[0], away=second[1]))
+        return ParseOutcome(
+            summary=MatchSummaryPayload(score_lines=lines),
+            warnings=[
+                parse_warning(
+                    "period lines parsed from the per-event summary feed "
+                    "(df_su_1_<id>) and cross-validated against the "
+                    "caller-provided final score",
+                    resp,
+                )
+            ],
+        )
 
     def _offset_for(self, category: str, params: Any) -> int:
         """Day offset for fixtures/results, from the date param or a default.
