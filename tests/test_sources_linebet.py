@@ -99,6 +99,100 @@ def _betwinner_assembled_odds_response() -> SourceResponse:
     )
 
 
+def _basketball_list_body() -> dict:
+    """Trimmed row from a live linebet basketball capture (2026-10-07)."""
+    return {
+        "Value": [
+            {
+                "O1": "CSKA Moscow",
+                "O2": "Uralmash",
+                "L": "VTB United League",
+                "LE": "VTB United League",
+                "CN": "Russia",
+                "CI": 376389401,
+                "S": 1791385200,
+                "E": [
+                    {"T": 8, "P": -25.5, "C": 1.86},
+                    {"T": 7, "P": 25.5, "C": 1.94},
+                    {"T": 401, "P": None, "C": 1.06},
+                    {"T": 402, "P": None, "C": 9.1},
+                ],
+            },
+            {
+                "O1": "Zenit Saint-Petersburg",
+                "O2": "Parma Perm",
+                "L": "VTB United League",
+                "LE": "VTB United League",
+                "CN": "Russia",
+                "CI": 376389402,
+                "S": 1791388800,
+                "E": [
+                    {"T": 401, "P": None, "C": 1.456},
+                    {"T": 402, "P": None, "C": 2.725},
+                ],
+            },
+        ]
+    }
+
+
+def _tennis_list_body() -> dict:
+    """Trimmed row from a live linebet tennis capture (2026-10-07)."""
+    return {
+        "Value": [
+            {
+                "O1": "Cori Gauff",
+                "O2": "Elise Mertens",
+                "L": "WTA. Beijing",
+                "LE": "WTA. Beijing",
+                "CN": "China",
+                "CI": 376710212,
+                "S": 1791355500,
+                "E": [
+                    {"T": 1, "P": None, "C": 1.235},
+                    {"T": 3, "P": None, "C": 3.98},
+                    {"T": 12, "P": 2.5, "C": 1.68},
+                ],
+            }
+        ]
+    }
+
+
+def _assembled_basketball_odds_response() -> SourceResponse:
+    payload = {
+        "kind": "odds",
+        "sport": "basketball",
+        "payload": _basketball_list_body(),
+        "details": {},
+        "half_details": {},
+        "detail_skipped": [],
+    }
+    return SourceResponse(
+        source="linebet",
+        payload=json.dumps(payload),
+        url="https://linebet.com/service-api/LineFeed/Get1x2_VZip",
+        status=200,
+        fetched_at="2026-10-07T09:00:00+00:00",
+    )
+
+
+def _assembled_tennis_odds_response() -> SourceResponse:
+    payload = {
+        "kind": "odds",
+        "sport": "tennis",
+        "payload": _tennis_list_body(),
+        "details": {},
+        "half_details": {},
+        "detail_skipped": [],
+    }
+    return SourceResponse(
+        source="linebet",
+        payload=json.dumps(payload),
+        url="https://linebet.com/service-api/LineFeed/Get1x2_VZip",
+        status=200,
+        fetched_at="2026-10-07T09:00:00+00:00",
+    )
+
+
 # -- 1xBet-family siblings (probe-verified 2026-09-24) ---------------------
 
 
@@ -132,6 +226,46 @@ def test_catalog_exposes_the_new_family_rows() -> None:
     assert default_source_order("football", "odds_betwinner") == ("betwinner",)
     assert default_source_order("football", "odds_1xbet_ke") == ("1xbet_ke",)
     assert "betwinner" in default_source_order("football", "odds")
+
+
+def test_catalog_exposes_basketball_and_tennis_linebet_rows() -> None:
+    from prime_sportdata.catalog import default_source_order
+
+    assert default_source_order("basketball", "odds_linebet") == ("linebet",)
+    assert default_source_order("tennis", "odds_linebet") == ("linebet",)
+
+
+def test_parse_odds_basketball_emits_home_away(adapter: LinebetAdapter) -> None:
+    outcome = adapter.parse_odds(_assembled_basketball_odds_response())
+
+    by_home = {
+        quote.home: quote for quote in outcome.quotes if quote.market == "home_away"
+    }
+    assert set(by_home) == {"CSKA Moscow", "Zenit Saint-Petersburg"}
+    cska = by_home["CSKA Moscow"]
+    assert cska.prices == {"home": 1.06, "away": 9.1}
+    assert cska.sport == "basketball"
+    assert cska.bookmaker == "linebet"
+    assert cska.external.source == "linebet"
+    assert cska.start_time_utc is not None
+
+
+def test_parse_odds_tennis_emits_home_away(adapter: LinebetAdapter) -> None:
+    outcome = adapter.parse_odds(_assembled_tennis_odds_response())
+
+    home_away = [quote for quote in outcome.quotes if quote.market == "home_away"]
+    assert len(home_away) == 1
+    assert home_away[0].prices == {"home": 1.235, "away": 3.98}
+    assert home_away[0].sport == "tennis"
+    assert home_away[0].home == "Cori Gauff"
+
+
+def test_parse_odds_basketball_ignores_football_only_markets(
+    adapter: LinebetAdapter,
+) -> None:
+    """Handicap/totals columns on the list row must not leak as quotes."""
+    outcome = adapter.parse_odds(_assembled_basketball_odds_response())
+    assert {quote.market for quote in outcome.quotes} == {"home_away"}
 
 
 # -- parse_odds -------------------------------------------------------------
@@ -336,7 +470,7 @@ def test_fetch_odds_assembles_list_and_details(adapter: LinebetAdapter, monkeypa
     for _ in _list_body()["Value"]:
         responses.append(_httpx_response(_gamezip_body(), "https://linebet.com/gamezip"))
 
-    def fake_request(url: str, *, params: dict[str, str]) -> httpx.Response:
+    def fake_request(url: str, *, params: dict[str, str], referer=None) -> httpx.Response:
         return responses.pop(0)
 
     monkeypatch.setattr(adapter, "_request", fake_request)
@@ -353,7 +487,7 @@ def test_fetch_odds_linebet_category_serves_odds(adapter: LinebetAdapter, monkey
     for _ in _list_body()["Value"]:
         responses.append(_httpx_response(_gamezip_body(), "https://linebet.com/gamezip"))
 
-    def fake_request(url: str, *, params: dict[str, str]) -> httpx.Response:
+    def fake_request(url: str, *, params: dict[str, str], referer=None) -> httpx.Response:
         return responses.pop(0)
 
     monkeypatch.setattr(adapter, "_request", fake_request)
@@ -375,7 +509,7 @@ def test_fetch_odds_stops_details_when_budget_exhausted(monkeypatch) -> None:
     for _ in _list_body()["Value"]:
         responses.append(_httpx_response(_gamezip_body(), "https://linebet.com/gamezip"))
 
-    def fake_request(url: str, *, params: dict[str, str]) -> httpx.Response:
+    def fake_request(url: str, *, params: dict[str, str], referer=None) -> httpx.Response:
         nonlocal now
         response = responses.pop(0)
         now += linebet_module.DETAIL_BUDGET_S  # one detail request consumed it all
@@ -394,7 +528,7 @@ def test_fetch_h2h_matches_pair_and_loads_history(adapter: LinebetAdapter, monke
         _httpx_response(_h2h_body(), "https://linebet.com/h2h"),
     ]
 
-    def fake_request(url: str, *, params: dict[str, str]) -> httpx.Response:
+    def fake_request(url: str, *, params: dict[str, str], referer=None) -> httpx.Response:
         return responses.pop(0)
 
     monkeypatch.setattr(adapter, "_request", fake_request)
@@ -409,7 +543,7 @@ def test_fetch_h2h_unmatched_pair_raises_not_found(adapter: LinebetAdapter, monk
     monkeypatch.setattr(
         adapter,
         "_request",
-        lambda url, *, params: _httpx_response(_list_body(), url),
+        lambda url, *, params, referer=None: _httpx_response(_list_body(), url),
     )
     with pytest.raises(NotFound):
         adapter.fetch("football", "h2h", {"entity_a": "Not In Slate", "entity_b": "Feyenoord"})
@@ -420,9 +554,45 @@ def test_fetch_dated_query_raises_not_found(adapter: LinebetAdapter) -> None:
         adapter.fetch("football", "odds", {"date": "2026-09-09"})
 
 
-def test_fetch_non_football_raises_not_found(adapter: LinebetAdapter) -> None:
+def test_fetch_unknown_sport_raises_not_found(adapter: LinebetAdapter) -> None:
     with pytest.raises(NotFound):
-        adapter.fetch("tennis", "odds", {})
+        adapter.fetch("cricket", "odds", {})
+
+
+def test_fetch_basketball_odds_uses_sports_3_and_skips_details(
+    adapter: LinebetAdapter, monkeypatch
+) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_request(url: str, *, params: dict[str, str], referer=None) -> httpx.Response:
+        seen["params"] = params
+        seen["referer"] = referer
+        seen["detail_calls"] = seen.get("detail_calls", 0) + 1
+        return _httpx_response(_basketball_list_body(), url)
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    resp = adapter.fetch("basketball", "odds_linebet", {})
+    assembled = json.loads(resp.payload)
+    assert assembled["kind"] == "odds"
+    assert assembled["sport"] == "basketball"
+    assert seen["params"]["sports"] == "3"
+    assert seen["referer"] == "https://linebet.com/en/line/basketball"
+    assert seen["detail_calls"] == 1  # only the list; no GetGameZip detail
+    assert assembled["details"] == {}
+
+
+def test_fetch_tennis_odds_uses_sports_4(adapter: LinebetAdapter, monkeypatch) -> None:
+    seen: dict[str, object] = {}
+
+    def fake_request(url: str, *, params: dict[str, str], referer=None) -> httpx.Response:
+        seen["params"] = params
+        return _httpx_response(_tennis_list_body(), url)
+
+    monkeypatch.setattr(adapter, "_request", fake_request)
+    resp = adapter.fetch("tennis", "odds_linebet", {})
+    assembled = json.loads(resp.payload)
+    assert assembled["sport"] == "tennis"
+    assert seen["params"]["sports"] == "4"
 
 
 def test_fetch_h2h_missing_entities_raises_bad_request(
@@ -431,7 +601,7 @@ def test_fetch_h2h_missing_entities_raises_bad_request(
     monkeypatch.setattr(
         adapter,
         "_request",
-        lambda url, *, params: _httpx_response(_list_body(), url),
+        lambda url, *, params, referer=None: _httpx_response(_list_body(), url),
     )
     with pytest.raises(BadRequest):
         adapter.fetch("football", "h2h", {"entity_a": "Barcelona"})

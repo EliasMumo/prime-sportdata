@@ -18,8 +18,8 @@ SPORTS: tuple[str, ...] = ("football", "basketball", "tennis")
 CATEGORIES: tuple[str, ...] = ("fixtures", "live", "results", "h2h", "odds")
 
 
-def test_exactly_twenty_two_rows():
-    assert len(ROWS) == 22
+def test_exactly_twenty_four_rows():
+    assert len(ROWS) == 24
 
 
 def test_covers_full_sport_x_category_matrix_once():
@@ -30,6 +30,8 @@ def test_covers_full_sport_x_category_matrix_once():
         | {("football", "odds_linebet")}
         | {("football", "odds_betwinner")}
         | {("football", "odds_1xbet_ke")}
+        | {("basketball", "odds_linebet")}
+        | {("tennis", "odds_linebet")}
         | {("football", "ou")}
         | {("football", "lineups")}
         | {("football", "match_summary")}
@@ -165,7 +167,7 @@ def test_catalog_module_importable_lookup():
         "betwinner",
         "1xbet_ke",
     )
-    assert len(catalog.ROWS) == 22
+    assert len(catalog.ROWS) == 24
 
 
 def test_football_h2h_linebet_first():

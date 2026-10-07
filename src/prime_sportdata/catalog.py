@@ -115,6 +115,12 @@ ROWS: tuple[CatalogRow, ...] = (
     CatalogRow("tennis", "odds", ODDS_PARAMS, BETEXPLORER_ODDS),
     CatalogRow("football", "odds_detailed", ODDS_DETAILED_PARAMS, ("betika", "linebet")),
     CatalogRow("football", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
+    # Basketball/tennis moneyline from the same linebet slate (live-verified
+    # 2026-10-07: sports=3 / sports=4 with flat 401/402 and 1/3 columns).
+    # Explicit rows so callers can merge them as per-selection gap-fills when
+    # the betexplorer day page has no quote for a fixture.
+    CatalogRow("basketball", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
+    CatalogRow("tennis", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
     # Per-event over/under totals for fixtures the day-wide odds lists miss
     # (e.g. Argentine-league slates with no betika totals quotes).
     CatalogRow("football", "ou", OU_PARAMS, BETEXPLORER_ODDS),

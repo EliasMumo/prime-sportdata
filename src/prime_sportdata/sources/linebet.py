@@ -151,6 +151,17 @@ DETAIL_BUDGET_S = 60.0
 _VIRTUAL_MARKERS = ("cyber", "virtual", "esoccer", "e-football", "zoom")
 
 _FOOTBALL = "football"
+_BASKETBALL = "basketball"
+_TENNIS = "tennis"
+# Verified live 2026-10-07: the same LineFeed slate serves basketball and
+# tennis under sports=3 / sports=4, with the flat moneyline columns carried
+# directly on the list rows (basketball: type 401 = home, 402 = away;
+# tennis: type 1 = first named side, 3 = second named side, no draw).
+_SPORT_IDS: dict[str, str] = {
+    _FOOTBALL: "1",
+    _BASKETBALL: "3",
+    _TENNIS: "4",
+}
 _H2H_CATEGORY = "h2h"
 _ODDS_CATEGORY = "odds"
 # Explicit linebet-only catalog row; behaves exactly like the odds category.
@@ -238,6 +249,34 @@ def _flat_1x2(event: Mapping[str, Any]) -> dict[str, float] | None:
             continue
         prices[{1: "1", 2: "X", 3: "2"}[market_type]] = odds
     return prices if set(prices) == {"1", "X", "2"} else None
+
+
+def _flat_two_way(
+    event: Mapping[str, Any],
+    *,
+    home_type: int,
+    away_type: int,
+) -> dict[str, float] | None:
+    """Two-way moneyline from the flat list: a home/away column pair.
+
+    Basketball ships type 401 = home / 402 = away; tennis ships type 1 =
+    first named side / 3 = second named side with no draw (live-verified
+    2026-10-07).  No detail request is needed: the pair sits on the list
+    row itself.
+    """
+    entries = event.get("E")
+    if not isinstance(entries, list):
+        return None
+    prices: dict[str, float] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        market_type = entry.get("T")
+        odds = _clean_odds(entry.get("C"))
+        if odds is None or market_type not in (home_type, away_type):
+            continue
+        prices["home" if market_type == home_type else "away"] = odds
+    return prices if set(prices) == {"home", "away"} else None
 
 
 def _event_teams_match(event: Mapping[str, Any], home: str, away: str) -> bool:
@@ -394,15 +433,21 @@ class LinebetAdapter(SourceAdapter):
 
     def fetch(self, sport: str, category: str, params: Mapping[str, str]) -> SourceResponse:
         sport, category = str(sport), str(category)
-        if sport != _FOOTBALL:
+        if sport not in _SPORT_IDS:
             raise NotFound(
-                f"linebet ships football-only paths; no verified {sport!r} path",
+                f"{self.source} ships football/basketball/tennis paths only; "
+                f"no verified {sport!r} path",
                 source=self.source,
             )
         if category not in {_H2H_CATEGORY} | set(self.slate_categories):
             raise NotFound(
                 f"{self.source} ships {'h2h and ' if self.supports_h2h else ''}"
                 f"odds categories only; no verified {category!r} endpoint",
+                source=self.source,
+            )
+        if category == _H2H_CATEGORY and sport != _FOOTBALL:
+            raise NotFound(
+                f"{self.source} h2h is football-only; no verified {sport!r} path",
                 source=self.source,
             )
         if (params.get("date") or "").strip():
@@ -413,9 +458,12 @@ class LinebetAdapter(SourceAdapter):
                 "the upcoming slate",
                 source=self.source,
             )
+        list_params = {**self.list_params, "sports": _SPORT_IDS[sport]}
+        referer = f"{self.base_url}/en/line/{sport}"
         list_resp = self._request(
             f"{self.base_url}{_LIST_PATH}",
-            params=self.list_params,
+            params=list_params,
+            referer=referer,
         )
         try:
             list_payload = list_resp.json()
@@ -433,29 +481,35 @@ class LinebetAdapter(SourceAdapter):
             details: dict[str, Any] = {}
             detail_skipped: list[str] = []
             half_details: dict[str, Any] = {}
-            detail_started = self._clock()
-            for event in self._select_detail_rows(events):
-                elapsed = self._clock() - detail_started
-                if elapsed >= DETAIL_BUDGET_S:
-                    detail_skipped.append("detail-budget")
-                    break
-                game_id = event.get("CI")
-                if isinstance(game_id, bool) or not isinstance(game_id, (int, float, str)):
-                    detail_skipped.append("no-game-id")
-                    continue
-                detail = self._fetch_detail(str(game_id))
-                if detail is None:
-                    detail_skipped.append(str(game_id))
-                    continue
-                details[str(game_id)] = detail
-                # Best-effort halves enrichment, bounded by the same wall
-                # budget as the detail phase; silently skipped on any failure.
-                if self.supports_halves:
-                    halves = self._fetch_halves(detail, detail_started)
-                    if halves:
-                        half_details[str(game_id)] = halves
+            # The detail phase decodes the football exotic markets (double
+            # chance, BTTS, totals, correct score).  Basketball and tennis
+            # ship their moneyline directly on the list rows (types 401/402
+            # and 1/3), so no GetGameZip detail requests are spent.
+            if sport == _FOOTBALL:
+                detail_started = self._clock()
+                for event in self._select_detail_rows(events):
+                    elapsed = self._clock() - detail_started
+                    if elapsed >= DETAIL_BUDGET_S:
+                        detail_skipped.append("detail-budget")
+                        break
+                    game_id = event.get("CI")
+                    if isinstance(game_id, bool) or not isinstance(game_id, (int, float, str)):
+                        detail_skipped.append("no-game-id")
+                        continue
+                    detail = self._fetch_detail(str(game_id))
+                    if detail is None:
+                        detail_skipped.append(str(game_id))
+                        continue
+                    details[str(game_id)] = detail
+                    # Best-effort halves enrichment, bounded by the same wall
+                    # budget as the detail phase; silently skipped on any failure.
+                    if self.supports_halves:
+                        halves = self._fetch_halves(detail, detail_started)
+                        if halves:
+                            half_details[str(game_id)] = halves
             assembled: dict[str, Any] = {
                 "kind": "odds",
+                "sport": sport,
                 "payload": list_payload,
                 "details": details,
                 "half_details": half_details,
@@ -619,6 +673,9 @@ class LinebetAdapter(SourceAdapter):
         payload = parse_json_response(resp)
         if not isinstance(payload, dict) or payload.get("kind") != "odds":
             raise NoData("linebet odds response lacks its assembled envelope", source=resp.source)
+        sport = payload.get("sport")
+        if not isinstance(sport, str) or sport not in _SPORT_IDS:
+            sport = _FOOTBALL
         data = payload.get("payload")
         events = data.get("Value") if isinstance(data, dict) else None
         if not isinstance(events, list):
@@ -660,7 +717,7 @@ class LinebetAdapter(SourceAdapter):
         for event in events:
             if not isinstance(event, dict):
                 continue
-            match_quotes = self._normalize_event(event, details, half_details)
+            match_quotes = self._normalize_event(event, details, half_details, sport=sport)
             if match_quotes is not None:
                 quotes.extend(match_quotes)
         return ParseOutcome(quotes=quotes, warnings=warnings)
@@ -725,6 +782,8 @@ class LinebetAdapter(SourceAdapter):
         event: Mapping[str, Any],
         details: Mapping[str, Any],
         half_details: Mapping[str, Any] | None = None,
+        *,
+        sport: str = _FOOTBALL,
     ) -> list[OddsQuote] | None:
         home = str(event.get("O1") or "").strip()
         away = str(event.get("O2") or "").strip()
@@ -741,12 +800,12 @@ class LinebetAdapter(SourceAdapter):
         external = ExternalRef(
             source=self.source,
             source_event_id=str(source_id),
-            source_url=f"{self.base_url}/en/line/football",
+            source_url=f"{self.base_url}/en/line/{sport}",
         )
 
         def quote(market: str, prices: dict[str, float]) -> OddsQuote:
             return OddsQuote(
-                sport=_FOOTBALL,  # type: ignore[arg-type]
+                sport=sport,  # type: ignore[arg-type]
                 external=external,
                 start_time_utc=kickoff,
                 home=home,
@@ -769,9 +828,20 @@ class LinebetAdapter(SourceAdapter):
             return None
 
         quotes: list[OddsQuote] = []
-        main = _flat_1x2(event)
-        if main is not None:
-            quotes.append(quote("1x2", main))
+        if sport == _FOOTBALL:
+            main = _flat_1x2(event)
+            if main is not None:
+                quotes.append(quote("1x2", main))
+        else:
+            # Two-way moneyline straight off the list row: basketball
+            # 401/402, tennis 1/3 (no detail request needed).
+            two_way = _flat_two_way(
+                event,
+                home_type=401 if sport == _BASKETBALL else 1,
+                away_type=402 if sport == _BASKETBALL else 3,
+            )
+            if two_way is not None:
+                quotes.append(quote("home_away", two_way))
         dc_group = group(_GROUP_DOUBLE_CHANCE)
         if dc_group is not None:
             dc = _double_chance_prices(dc_group)
@@ -884,7 +954,9 @@ class LinebetAdapter(SourceAdapter):
 
     # -- request ------------------------------------------------------------
 
-    def _request(self, url: str, *, params: dict[str, str]) -> httpx.Response:
+    def _request(
+        self, url: str, *, params: dict[str, str], referer: str | None = None
+    ) -> httpx.Response:
         attempt = 0
         while True:
             try:
@@ -894,7 +966,7 @@ class LinebetAdapter(SourceAdapter):
                         "User-Agent": USER_AGENT,
                         "Accept": "application/json, text/plain, */*",
                         "Accept-Language": "en-US,en;q=0.9",
-                        "Referer": self.referer,
+                        "Referer": referer or self.referer,
                     },
                     follow_redirects=False,
                 ) as client:
