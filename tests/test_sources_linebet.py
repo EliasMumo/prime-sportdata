@@ -279,8 +279,30 @@ def test_parse_odds_emits_verified_markets_only(adapter: LinebetAdapter) -> None
     assert "btts" in markets
     assert "correct_score" in markets
     assert any(market.startswith("total_") for market in markets)
-    # HT/FT is deliberately not shipped (ambiguous encoding, see docstring).
+    # The captured fixture predates the 2026-10-08 HT/FT decoder and carries
+    # no group-89 rows, so htft is absent here; the dedicated test below
+    # covers the decoder itself.
     assert "htft" not in markets
+
+
+def test_htft_prices_decodes_group_89(adapter: LinebetAdapter) -> None:
+    from prime_sportdata.sources.linebet import _htft_prices
+
+    rows = []
+    odds = 0
+    for half_type, half_key in ((763, "1"), (764, "X"), (765, "2")):
+        for full_param, full_key in ((1, "1"), (2, "X"), (3, "2")):
+            odds += 1
+            rows.append({"T": half_type, "P": full_param, "C": 1.0 + odds / 10.0})
+    # 1/1..2/2 in row order; the decoder maps each to its betika-style key.
+    prices = _htft_prices({"E": [rows]})
+    assert prices == {
+        "1/1": 1.1, "1/X": 1.2, "1/2": 1.3,
+        "X/1": 1.4, "X/X": 1.5, "X/2": 1.6,
+        "2/1": 1.7, "2/X": 1.8, "2/2": 1.9,
+    }
+    assert _htft_prices({"E": []}) is None
+    assert _htft_prices({"E": [[{"T": 763, "P": 1, "C": 1.1}]]}) is None
 
 
 def test_parse_odds_1x2_matches_live_capture(adapter: LinebetAdapter) -> None:

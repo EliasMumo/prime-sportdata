@@ -178,6 +178,11 @@ _GROUP_CORRECT_SCORE = 8863
 _GROUP_1X2 = 1
 _GROUP_INDIVIDUAL_TOTAL_HOME = 15
 _GROUP_INDIVIDUAL_TOTAL_AWAY = 62
+# HT/FT group (probe-verified 2026-10-08): nine rows, type 763/764/765 = the
+# half-time result (home/draw/away), parameter 1/2/3 = the full-time result.
+_GROUP_HTFT = 89
+_HTFT_HALF_TYPES = {763: "1", 764: "X", 765: "2"}
+_HTFT_FULL_PARAMS = {1: "1", 2: "X", 3: "2"}
 
 _DC_LABELS = ("1X", "12", "X2")
 _FIRST_HALF = "first_half"
@@ -289,6 +294,38 @@ def _event_teams_match_swapped(event: Mapping[str, Any], home: str, away: str) -
     event_home = _normalized_name(str(event.get("O1") or ""))
     event_away = _normalized_name(str(event.get("O2") or ""))
     return event_home == away and event_away == home
+
+
+def _htft_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
+    """Group 89: the nine half-time/full-time outcomes.
+
+    Probe-verified 2026-10-08: rows carry type 763 (home at HT), 764 (draw
+    at HT) or 765 (away at HT) and parameter 1/2/3 for the full-time result.
+    Emits betika-compatible keys ``1/1``..``2/2`` so the algo's nine-outcome
+    HT/FT completeness rule matches both sources.
+    """
+    columns = group.get("E")
+    if not isinstance(columns, list) or not columns:
+        return None
+    prices: dict[str, float] = {}
+    for column in columns:
+        for entry in column if isinstance(column, list) else [column]:
+            if not isinstance(entry, dict):
+                continue
+            market_type = entry.get("T")
+            parameter = entry.get("P")
+            half = _HTFT_HALF_TYPES.get(market_type)
+            full = _HTFT_FULL_PARAMS.get(parameter)
+            if half is None or full is None:
+                continue
+            odds = _clean_odds(entry.get("C"))
+            if odds is None:
+                continue
+            prices[f"{half}/{full}"] = odds
+    expected = {
+        "1/1", "1/X", "1/2", "X/1", "X/X", "X/2", "2/1", "2/X", "2/2",
+    }
+    return prices if set(prices) == expected else None
 
 
 def _double_chance_prices(group: Mapping[str, Any]) -> dict[str, float] | None:
@@ -852,6 +889,11 @@ class LinebetAdapter(SourceAdapter):
             btts = _btts_prices(btts_group)
             if btts is not None:
                 quotes.append(quote("btts", btts))
+        htft_group = group(_GROUP_HTFT)
+        if htft_group is not None:
+            htft = _htft_prices(htft_group)
+            if htft is not None:
+                quotes.append(quote("htft", htft))
         totals_group = group(_GROUP_TOTALS)
         if totals_group is not None:
             for market, prices in _totals_quotes(totals_group).items():
