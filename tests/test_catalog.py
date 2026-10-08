@@ -19,7 +19,7 @@ CATEGORIES: tuple[str, ...] = ("fixtures", "live", "results", "h2h", "odds")
 
 
 def test_exactly_twenty_four_rows():
-    assert len(ROWS) == 24
+    assert len(ROWS) == 28
 
 
 def test_covers_full_sport_x_category_matrix_once():
@@ -32,6 +32,10 @@ def test_covers_full_sport_x_category_matrix_once():
         | {("football", "odds_1xbet_ke")}
         | {("basketball", "odds_linebet")}
         | {("tennis", "odds_linebet")}
+        | {("basketball", "odds_betwinner")}
+        | {("tennis", "odds_betwinner")}
+        | {("basketball", "odds_1xbet_ke")}
+        | {("tennis", "odds_1xbet_ke")}
         | {("football", "ou")}
         | {("football", "lineups")}
         | {("football", "match_summary")}
@@ -73,13 +77,15 @@ def test_odds_linebet_linebet_only_football():
     assert get_row("football", "odds_linebet").params == ("league", "limit")
 
 
-def test_family_sibling_odds_rows_football_only():
-    assert get_row("football", "odds_betwinner").sources_default == ("betwinner",)
-    assert get_row("football", "odds_betwinner").params == ("league", "limit")
-    assert get_row("football", "odds_1xbet_ke").sources_default == ("1xbet_ke",)
-    assert get_row("football", "odds_1xbet_ke").params == ("league", "limit")
-    with pytest.raises(KeyError):
-        get_row("basketball", "odds_betwinner")
+def test_family_sibling_odds_rows_cover_all_three_sports():
+    """Owner-directed 2026-10-08: betwinner/1xbet_ke serve the same flat
+    two-way moneyline for basketball and tennis as linebet, so one tripped
+    breaker never starves those categories."""
+    for sport in ("football", "basketball", "tennis"):
+        assert get_row(sport, "odds_betwinner").sources_default == ("betwinner",)
+        assert get_row(sport, "odds_betwinner").params == ("league", "limit")
+        assert get_row(sport, "odds_1xbet_ke").sources_default == ("1xbet_ke",)
+        assert get_row(sport, "odds_1xbet_ke").params == ("league", "limit")
 
 
 def test_default_source_order_matches_row():
@@ -167,7 +173,7 @@ def test_catalog_module_importable_lookup():
         "betwinner",
         "1xbet_ke",
     )
-    assert len(catalog.ROWS) == 24
+    assert len(catalog.ROWS) == 28
 
 
 def test_football_h2h_linebet_first():

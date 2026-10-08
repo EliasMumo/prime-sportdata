@@ -121,6 +121,14 @@ ROWS: tuple[CatalogRow, ...] = (
     # the betexplorer day page has no quote for a fixture.
     CatalogRow("basketball", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
     CatalogRow("tennis", "odds_linebet", ODDS_DETAILED_PARAMS, LINEBET_ODDS),
+    # Sibling 1xBet-family moneyline for basketball/tennis (owner-directed
+    # 2026-10-08: more bookmakers per market so one tripped breaker never
+    # starves a category).  Same flat 401/402 and 1/3 two-way columns as
+    # linebet (probe-verified 2026-10-07); no detail requests needed.
+    CatalogRow("basketball", "odds_betwinner", ODDS_DETAILED_PARAMS, ("betwinner",)),
+    CatalogRow("tennis", "odds_betwinner", ODDS_DETAILED_PARAMS, ("betwinner",)),
+    CatalogRow("basketball", "odds_1xbet_ke", ODDS_DETAILED_PARAMS, ("1xbet_ke",)),
+    CatalogRow("tennis", "odds_1xbet_ke", ODDS_DETAILED_PARAMS, ("1xbet_ke",)),
     # Per-event over/under totals for fixtures the day-wide odds lists miss
     # (e.g. Argentine-league slates with no betika totals quotes).
     CatalogRow("football", "ou", OU_PARAMS, BETEXPLORER_ODDS),

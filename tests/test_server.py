@@ -180,7 +180,7 @@ def test_catalog_lists_all_24_rows_with_params_and_curl(client: TestClient) -> N
     resp = client.get("/catalog")
     assert resp.status_code == 200
     rows = resp.json()
-    assert len(rows) == 24
+    assert len(rows) == 28
     sports = {row["sport"] for row in rows}
     categories = {row["category"] for row in rows}
     assert sports == {"football", "basketball", "tennis"}
