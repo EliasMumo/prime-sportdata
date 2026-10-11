@@ -415,6 +415,53 @@ def test_nonempty_odds_keep_full_ttl(tmp_path: Path) -> None:
     assert adapters["betexplorer"].fetch_calls == 2
 
 
+# --- stale-if-error ------------------------------------------------------------
+
+
+def test_stale_if_error_replays_previous_success_on_total_failure(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    adapters["flashscore"].events = [make_event("cached match")]
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    first = engine.fetch_on_demand(*REQUEST, PARAMS)
+    assert first.meta.cached is False
+    # Expire the entry, then take every source down.
+    clock.advance(301.0)
+    for name in adapters:
+        adapters[name].fetch_error = SourceUnavailable("down", source=name)
+    stale = engine.fetch_on_demand(*REQUEST, PARAMS)
+    assert stale.meta.cached is True
+    assert stale.data.events[0].home.name == "cached match"
+    assert any("stale-if-error" in warning for warning in stale.meta.warnings)
+
+
+def test_stale_if_error_never_replays_live(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    adapters["flashscore"].events = [make_event("live event")]
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    engine.fetch_on_demand("football", "live", {"league": "x", "limit": 50})
+    clock.advance(31.0)  # live TTL is 30s
+    for name in adapters:
+        adapters[name].fetch_error = SourceUnavailable("down", source=name)
+    with pytest.raises(FetchFailed):
+        engine.fetch_on_demand("football", "live", {"league": "x", "limit": 50})
+
+
+def test_stale_if_error_never_replays_empty_odds(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    params = {"date": "2026-09-02", "limit": 50}
+    # Empty 200 odds: cached only briefly via the empty-odds TTL.
+    engine.fetch_on_demand("football", "odds", params)
+    clock.advance(61.0)  # empty-odds TTL is 60s
+    for name in ("betexplorer", "linebet", "betwinner", "1xbet_ke"):
+        adapters[name].fetch_error = SourceUnavailable("down", source=name)
+    with pytest.raises(FetchFailed):
+        engine.fetch_on_demand("football", "odds", params)
+
+
 # --- rate limiting -------------------------------------------------------------
 
 

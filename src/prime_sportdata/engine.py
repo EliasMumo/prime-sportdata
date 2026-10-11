@@ -15,8 +15,12 @@ Request pipeline
    ``ttl_live_seconds``; fixtures/results/h2h -> ``ttl_default_seconds`` (the
    fixtures bucket; results/h2h reuse it — config comment precedent). Only
    fresh entries short-circuit (``meta.cached=true``, adapter never touched);
-   stale entries are refetched and overwritten on success (no stale-if-error).
-   Only successful answers are cached — an all-fail request is never cached.
+   stale entries are refetched and overwritten on success. On total failover
+   failure (``FetchFailed``) the previous successful answer is replayed as
+   stale-if-error for every category except ``live``; empty odds answers are
+   never replayed (they are the source-rollover symptom the empty-odds TTL
+   exists to shed). Only successful answers are cached — an all-fail request
+   is never cached.
 2. **Rate limiter**: ``RateLimiter.acquire`` before EVERY adapter call, keyed
    by the adapter's host when known (``DEFAULT_HOSTS``, overridable) else the
    source name; never faster than the configured interval.
@@ -77,6 +81,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar, cast
+
+from pydantic import ValidationError
 
 from prime_sportdata.cache import DiskCache
 from prime_sportdata.catalog import SOURCES, get_row, source_order
@@ -413,10 +419,16 @@ class Engine:
             order = source_order(cast(Sport, sport), cast(Category, category), self._order_override)
         norm = self._normalize_params(params)
         key = self._cache_key(sport, category, norm, source)
-        payload, fresh, _stored = self._cache.get(key)
+        payload, fresh, stored_at = self._cache.get(key)
         if fresh and isinstance(payload, dict):
             return self._envelope_from_cache(sport, category, payload)
-        envelope = self._fetch_uncached(sport, category, norm, order)
+        try:
+            envelope = self._fetch_uncached(sport, category, norm, order)
+        except FetchFailed as exc:
+            stale = self._serve_stale(sport, category, payload, exc, stored_at)
+            if stale is not None:
+                return stale
+            raise
         if category == "live":
             ttl = self._ttl_live
         elif category in _ODDS_CATEGORIES:
@@ -638,6 +650,45 @@ class Engine:
     def _envelope_from_cache(self, sport: str, category: str, payload: dict[str, Any]) -> Envelope:
         envelope = Envelope.model_validate(payload)
         meta = envelope.meta.model_copy(update={"cached": True, "latency_ms": 0})
+        return envelope.model_copy(update={"meta": meta})
+
+    def _serve_stale(
+        self,
+        sport: str,
+        category: str,
+        payload: dict[str, Any] | None,
+        failure: FetchFailed,
+        stored_at: float | None,
+    ) -> Envelope | None:
+        """Replay the previous successful answer when every source failed.
+
+        Stale-if-error keeps one transient all-source outage (cold start,
+        upstream block, renderer timeout) from zeroing a day's odds or
+        results. Live data is never replayed (stale live scores would mislead
+        settlement), and empty odds answers are the source-rollover symptom
+        the empty-odds TTL exists to shed — replaying one would keep a day's
+        odds empty for the next caller too.
+        """
+        if category == "live" or payload is None:
+            return None
+        try:
+            envelope = Envelope.model_validate(payload)
+        except ValidationError:
+            return None
+        if category in _ODDS_CATEGORIES and not getattr(envelope.data, "quotes", None):
+            return None
+        age = ""
+        if stored_at is not None:
+            age = f" (~{max(0.0, self._clock() - stored_at):.0f}s old)"
+        warnings = list(envelope.meta.warnings)
+        warnings.append(
+            "stale-if-error: live fetch failed "
+            f"({failure.last_code}: {failure.detail}); serving cached "
+            f"{category} answer from {envelope.meta.fetched_at_utc}{age}"
+        )
+        meta = envelope.meta.model_copy(
+            update={"cached": True, "latency_ms": 0, "warnings": warnings}
+        )
         return envelope.model_copy(update={"meta": meta})
 
     @staticmethod
