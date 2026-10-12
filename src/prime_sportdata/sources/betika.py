@@ -112,9 +112,12 @@ LIST_PAGE_SIZE = 500
 # Pagination is bounded for ban-risk discipline.  The verified list endpoint
 # serves the requested page size (``limit=500`` live-verified 2026-09-09) and
 # returns pages in kickoff order, so a few pages cover the next ~36 h even
-# when the first page is dominated by virtual matches.
+# when the first page is dominated by virtual matches.  The upcoming list is
+# served ~three weeks ahead (live-verified 2026-10-12: page 4 reaches
+# 2026-11-02), so the horizon is widened to five days to match the algo's
+# five-day forward pricing window instead of stranding future Sure Bets.
 MAX_LIST_PAGES = 5
-LIST_HORIZON_HOURS = 36.0
+LIST_HORIZON_HOURS = 120.0
 DETAIL_MIN_INTERVAL_S = 1.0
 
 # Virtual matches Betika interleaves with real soccer ("Zoom Soccer",

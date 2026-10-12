@@ -332,11 +332,11 @@ def test_fetch_paginates_until_horizon() -> None:
     )
     resp = transport.fetch("football", "odds_detailed", {})
     payload = json.loads(resp.payload)
-    assert len(payload["rows"]) == 5
-    # Horizon is now+36h (2026-09-10T16:00Z). Page 3 reaches past it, so
-    # page 4 must never be requested.
+    assert len(payload["rows"]) == 6
+    # Horizon is now+120h (2026-09-14T04:00Z). No supplied page reaches it,
+    # so the adapter keeps paging until page 5 (empty) and stops.
     list_pages = [params["page"] for url, params in transport.calls if url.endswith("matches")]
-    assert list_pages == ["1", "2", "3"]
+    assert list_pages == ["1", "2", "3", "4", "5"]
     assert all(params["limit"] == "500" for url, params in transport.calls if url.endswith("matches"))
 
 
