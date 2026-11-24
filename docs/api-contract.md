@@ -189,10 +189,13 @@ exactly this body and code: `tests/test_server.py::test_v1_all_sources_down_is_5
 h2h availability today: **football with a verified flashscore `event` +
 `kickoff`** can answer 200 from the recorded `df_hh_1_<event>` feed (see
 `docs/source-health.md`). The feed is corroborated before any meeting is
-shipped: the row whose `KP` equals `event` must list `entity_a` as home and
-`entity_b` as away and its `KC` must equal `kickoff`; otherwise the cell is
-unavailable (reversed orientation, other participants, stale id, malformed
-rows). Only completed meetings of the same pair strictly before the kickoff
+shipped: for a finished event the row whose `KP` equals `event` must list
+`entity_a` as home and `entity_b` as away and its `KC` must equal `kickoff`.
+An **upcoming** fixture is not listed in its own feed (recorded 2026-11-24):
+there the feed's `Last matches: <team>` sections must anchor on exactly the
+two requested participants, and the caller-verified `kickoff` remains the
+time boundary. Otherwise the cell is unavailable (reversed orientation, other
+participants, stale id, malformed rows). Only completed meetings of the same pair strictly before the kickoff
 are returned, deduplicated; each team's own recent matches are never mixed in.
 A name-only h2h call (no `event`) still has no verified name→event resolution
 and keeps the typed-error path, as do basketball/tennis h2h (no recorded

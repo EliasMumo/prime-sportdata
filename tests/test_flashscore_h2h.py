@@ -366,6 +366,58 @@ def test_parse_h2h_drops_an_inconsistent_duplicate_of_the_same_event(
         adapter.parse_h2h(_resp(body), params=_params())
 
 
+def test_parse_h2h_upcoming_event_is_corroborated_from_section_anchors(
+    adapter: fs.FlashscoreAdapter,
+) -> None:
+    """Upcoming fixtures have no target row; the feed's anchors prove the pair.
+
+    Recorded 2026-11-24 (df_hh_1_dbLeaGLk): an upcoming fixture's feed carries
+    prior meetings but never its own event row.
+    """
+    prior = _row(
+        event="PriorMeeting", kickoff=1788021000, home="Sassuolo",
+        away="Frosinone", home_score=2, away_score=1, venue="home",
+    )
+    reverse = _row(
+        event="PriorMeeting2", kickoff=1787510700, home="Frosinone",
+        away="Sassuolo", home_score=1, away_score=0, venue="home",
+    )
+    at_or_after = _row(
+        event="LaterMeeting", kickoff=KICKOFF_EPOCH + 86_400, home="Sassuolo",
+        away="Frosinone", home_score=3, away_score=3, venue="home",
+    )
+    body = (
+        "SA÷1¬~KA÷Overall¬IS÷¬~"
+        "KB÷Last matches: Sassuolo¬~" + prior + "~" + at_or_after + "~"
+        "KB÷Last matches: Frosinone¬~" + reverse + "~"
+        "KB÷Head-to-head matches¬~" + prior + "~"
+    )
+    outcome = adapter.parse_h2h(_resp(body), params=_params())
+
+    assert [event.external.source_event_id for event in outcome.events] == [
+        "PriorMeeting",
+        "PriorMeeting2",
+    ]
+    assert outcome.events[0].home.name == "Sassuolo"
+    assert outcome.events[1].home.name == "Frosinone"
+    assert any("does not contain the target event row" in warning for warning in outcome.warnings)
+
+
+def test_parse_h2h_upcoming_event_with_foreign_anchors_is_rejected(
+    adapter: fs.FlashscoreAdapter,
+) -> None:
+    row = _row(
+        event="PriorMeeting", kickoff=1788021000, home="Sassuolo",
+        away="Frosinone", home_score=2, away_score=1, venue="home",
+    )
+    body = (
+        "SA÷1¬~KB÷Last matches: Torino¬~" + row + "~"
+        "KB÷Last matches: Cesena¬~"
+    )
+    with pytest.raises(NoData, match="do not anchor on both requested participants"):
+        adapter.parse_h2h(_resp(body), params=_params())
+
+
 # --- parse: unavailable data --------------------------------------------------
 
 

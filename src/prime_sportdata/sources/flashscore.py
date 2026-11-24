@@ -554,11 +554,17 @@ class FlashscoreAdapter(SourceAdapter):
 
         Honesty rules (recorded feed shape, tests/fixtures/flashscore/h2h/):
 
-        * The verified event id must appear in the feed; that row's ordered
-          participants (``KJ``/``KK``) must equal ``entity_a``/``entity_b`` and
-          its kickoff (``KC``) must equal the caller's scheduled kickoff.  A
-          reversed or missing participants row, an ambiguous/duplicated target
-          row or a kickoff mismatch raises ``NoData`` — never a guessed pair.
+        * Finished events are listed in their own feed: the row whose ``KP``
+          equals the event id must list ``entity_a``/``entity_b`` in that order
+          and its ``KC`` must equal the caller's scheduled kickoff.
+        * Upcoming events are not listed in their own feed (recorded
+          2026-11-24: ``df_hh_1_dbLeaGLk`` carried 25 prior meetings but no
+          target row).  There the feed's own ``Last matches: <team>`` sections
+          must anchor on exactly the two requested participants; the caller's
+          verified kickoff remains the time boundary.
+        * A reversed or missing participants row, an ambiguous/duplicated
+          target row, a kickoff mismatch or a feed anchored on another pair
+          raises ``NoData`` — never a guessed pair.
         * Only completed meetings of the same pair (either home/away order,
           scored by ``KU``/``KT``/``KL``) strictly before the kickoff are
           returned.  Rows at/after the kickoff are dropped (the target event
@@ -603,7 +609,8 @@ class FlashscoreAdapter(SourceAdapter):
 
         rows = self._h2h_rows(parts)
         target = self._h2h_target(rows, event_id, home_key, away_key, kickoff_epoch, resp)
-        self._verify_orientation(target, resp)
+        if target is not None:
+            self._verify_orientation(target, resp)
 
         events: list[Event] = []
         seen: dict[str, tuple[int, str, str, int, int]] = {}
@@ -666,6 +673,16 @@ class FlashscoreAdapter(SourceAdapter):
                 resp,
             )
         ]
+        if target is None:
+            warnings.append(
+                parse_warning(
+                    "the feed does not contain the target event row (upcoming "
+                    "fixture): participants were corroborated from the feed's "
+                    "own 'Last matches: <team>' sections and the "
+                    "caller-verified kickoff bounds the meeting list",
+                    resp,
+                )
+            )
         if not events:
             warnings.append(
                 parse_warning(
@@ -725,16 +742,30 @@ class FlashscoreAdapter(SourceAdapter):
         away_key: str,
         kickoff_epoch: int,
         resp: SourceResponse,
-    ) -> _H2HMeeting:
-        """Find and corroborate the feed row for the verified event id."""
+    ) -> _H2HMeeting | None:
+        """Corroborate the verified event id; None for an upcoming fixture.
+
+        A finished event carries its own row (KP = id) with ordered
+        participants and the kickoff.  An upcoming event carries no such row:
+        the feed's section anchors prove the pair instead, and the caller's
+        kickoff — already validated as an aware instant — is the boundary.
+        """
         targets = [row for row in rows if row.event_id == event_id]
         if not targets:
-            raise NoData(
-                f"h2h feed does not contain the verified event {event_id}: the "
-                "event id cannot be corroborated (participants/kickoff are "
-                "unverified) — refusing to return another pair's meetings",
-                source=resp.source,
-            )
+            # Upcoming fixtures are not listed in their own h2h feed, but the
+            # feed still names both participants in its "Last matches: <team>"
+            # sections.  Requiring both (and only those) anchors corroborates
+            # the pair; the caller-verified kickoff stays the time boundary.
+            anchors = {row.anchor for row in rows if row.anchor is not None}
+            if anchors != {home_key, away_key}:
+                raise NoData(
+                    f"h2h feed does not contain the verified event {event_id} "
+                    f"and its 'Last matches' sections ({sorted(anchors)}) do "
+                    "not anchor on both requested participants — the event "
+                    "cannot be corroborated",
+                    source=resp.source,
+                )
+            return None
         signatures = {(row.kickoff, row.home_key, row.away_key) for row in targets}
         if len(signatures) > 1:
             raise NoData(
