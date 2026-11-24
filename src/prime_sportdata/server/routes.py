@@ -56,6 +56,17 @@ def _error(status: int, code: str, detail: str, source: str | None = None) -> JS
     return JSONResponse(status_code=status, content=body.model_dump(mode="json"))
 
 
+def _is_iso_kickoff(value: str) -> bool:
+    """True for an ISO-8601 timestamp that carries a UTC offset."""
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text).tzinfo is not None
+    except ValueError:
+        return False
+
+
 def _today_iso() -> str:
     return datetime.now(UTC).date().isoformat()
 
@@ -93,6 +104,8 @@ def _example_curl(row_sport: str, row_category: str, params: tuple[str, ...]) ->
         qs.append("team_b=Chelsea")
     if "event" in params:
         qs.append("event=E50wDhIl")
+    if "kickoff" in params:
+        qs.append("kickoff=2026-09-02T13:00:00Z")
     if "home" in params:
         qs.append("home=Team+A")
     if "away" in params:
@@ -168,6 +181,17 @@ def _parse_query(
             return None, _error(
                 400, "bad_request", f"h2h requires both entities: {', '.join(missing)} missing"
             )
+    # h2h kickoff: when supplied it must be an ISO-8601 instant with an
+    # offset — a naive timestamp would make the "before kickoff" filter
+    # depend on an unstated timezone.
+    raw_kickoff = params.get("kickoff")
+    if raw_kickoff and not _is_iso_kickoff(raw_kickoff):
+        return None, _error(
+            400,
+            "bad_request",
+            "kickoff must be an ISO-8601 timestamp with a UTC offset "
+            f"(e.g. 2026-09-02T13:00:00Z), got {raw_kickoff!r}",
+        )
     # lineups: both team names are required (resolution is search -> shared
     # upcoming event -> sheets; no verified name-free path).
     if category == "lineups":

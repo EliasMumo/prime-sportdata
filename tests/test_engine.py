@@ -90,9 +90,11 @@ class FakeAdapter(SourceAdapter):
         self.events: list[Event] = []
         self.quotes: list[OddsQuote] = []
         self.warnings: list[str] = []
+        self.last_params: dict[str, str] = {}
 
     def fetch(self, sport: str, category: str, params: Mapping[str, str]) -> SourceResponse:
         self.fetch_calls += 1
+        self.last_params = dict(params)
         if self.fetch_error is not None:
             raise self.fetch_error
         return SourceResponse(
@@ -678,6 +680,50 @@ def test_h2h_envelope_payload_carries_requested_entities(tmp_path: Path) -> None
     assert env.meta.category == "h2h"
     # h2h shares the long TTL bucket; league echoed back
     assert env.meta.request.league == "Premier League"
+
+
+def test_h2h_verified_event_and_kickoff_reach_the_adapter(tmp_path: Path) -> None:
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    params = {
+        "entity_a": "Sassuolo",
+        "entity_b": "Frosinone",
+        "event": "KxrZoe94",
+        "kickoff": "2026-09-02T13:00:00Z",
+    }
+    adapters["flashscore"].events = []
+    env = engine.fetch_on_demand("football", "h2h", params, source="flashscore")
+    assert adapters["flashscore"].last_params["event"] == "KxrZoe94"
+    assert adapters["flashscore"].last_params["kickoff"] == "2026-09-02T13:00:00Z"
+    assert env.meta.request.event_id == "KxrZoe94"
+    assert env.meta.request.kickoff == "2026-09-02T13:00:00Z"
+
+
+def test_h2h_parse_failure_leaves_the_fixture_path_and_breaker_healthy(tmp_path: Path) -> None:
+    """h2h is optional enrichment: an unusable h2h feed must not block the
+    day-feed path the publication runs on, and must not trip the breaker."""
+    clock, sleeps = FakeClock(), SleepRecorder()
+    adapters = make_adapters()
+    engine = build_engine(tmp_path, clock, sleeps, adapters)
+    adapters["flashscore"].parse_error = NoData(
+        "h2h feed does not contain the verified event", source="flashscore"
+    )
+    with pytest.raises(FetchFailed):
+        engine.fetch_on_demand(
+            "football",
+            "h2h",
+            {"entity_a": "Sassuolo", "entity_b": "Frosinone", "event": "KxrZoe94",
+             "kickoff": "2026-09-02T13:00:00Z"},
+            source="flashscore",
+        )
+    # NoData proved the transport answered: it is not an outage/ban signal.
+    assert engine.breaker_views()["flashscore"].state == "closed"
+
+    adapters["flashscore"].parse_error = None
+    adapters["flashscore"].events = [make_event("fixture published")]
+    env = engine.fetch_on_demand("football", "fixtures", {"date": "2026-09-02", "limit": 50})
+    assert env.data.events[0].home.name == "fixture published"
 
 
 def test_odds_linebet_category_dispatches_to_parse_odds(tmp_path: Path) -> None:

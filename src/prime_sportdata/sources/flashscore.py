@@ -50,11 +50,22 @@ Network realities recorded that session
   live parses ship it as an S-line exactly like the sofascore adapter does
   for in-play sets.
 * Head-to-head: the per-event feed ``df_hh_<sportId>_<eventId>`` was verified
-  live (``df_hh_1_KxrZoe94`` -> 200) but requires a source event id; no
-  team-name -> event resolution chain was probed this session, and source ids
-  are not shared across sources — the SPEC h2h envelope (two entities +
-  meetings) cannot be built honestly, so the h2h cell raises ``NotFound``
-  with this evidence.
+  live (``df_hh_1_KxrZoe94`` -> 200, recorded under
+  ``tests/fixtures/flashscore/h2h/``; the full 2026-11-24 capture carries the
+  target row plus 14 real prior meetings, all predating the kickoff).  There is
+  still no team-name -> event resolution chain (no search/team path was
+  probed), so h2h only runs when
+  the caller supplies a *verified* flashscore event id plus the scheduled
+  kickoff and both entity names.  The recorded feed carries the target event
+  row itself (``KP`` = event id, ``KC`` = kickoff, ``KJ``/``KK`` = home/away,
+  ``KL``/``KU``/``KT`` = final score), which corroborates the id: the adapter
+  requires the row's ordered participants and its ``KC`` to match the call,
+  then returns only completed meetings of the same pair strictly before that
+  kickoff.  Name-only calls keep the pre-network ``NotFound`` (unchanged);
+  an id without a kickoff is an honest empty h2h answer (``NoData``, no
+  request sent) because the time filter would be unverified.  Only football
+  is enabled — the ``df_hh_1_*`` shape is the recorded one; ids 2/3 were never
+  probed.
 
 Retry discipline (SPEC Ban-risk policy): max 2 retries, exponential backoff
 with jitter, ONLY on transport timeouts/errors and HTTP 5xx — never on
@@ -73,7 +84,10 @@ shape first (SPEC).
 from __future__ import annotations
 
 import random
+import re
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone, tzinfo
 from typing import Any, ClassVar
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -134,6 +148,11 @@ _SPORT_BY_ID: dict[str, Sport] = {"1": "football", "2": "tennis", "3": "basketba
 # were probed live on 2026-09-15 for football, tennis, and basketball
 # (f_<s>_<offset>_3_en_2 -> HTTP 200 with data; offset -8 -> 401).
 _FEED_TAIL = "3_en_2"
+# h2h feeds verified from a real recorded body: df_hh_1_<eventId> (football).
+# The tennis/basketball ids (2/3) follow the same resolver but were never
+# probed, so those sports keep the existing typed-error cells.
+_H2H_VERIFIED_SPORTS: frozenset[str] = frozenset({"football"})
+_H2H_SCORE_RE = re.compile(r"^(\d+):(\d+)$")
 VERIFIED_DAY_OFFSETS: tuple[int, ...] = tuple(range(-7, 2))
 _CONNECT_TIMEOUT_S = 12.0
 _MAX_RETRIES = 2
@@ -238,8 +257,71 @@ def _start_time_utc(timestamp: str | None) -> str | None:
     return datetime.fromtimestamp(value, tz=UTC).isoformat()
 
 
+def _clean_team_name(value: str) -> str:
+    """Display name with flashscore's leading winner marker (``*``) removed."""
+    return value.strip().lstrip("*").strip()
+
+
+def _team_key(value: str) -> str:
+    """Comparison key for a team name (case/whitespace/marker insensitive)."""
+    return " ".join(_clean_team_name(value).casefold().split())
+
+
+def _kickoff_epoch(value: str) -> int | None:
+    """Unix seconds for a caller-supplied ISO-8601 kickoff (None when absent).
+
+    A naive timestamp is refused: the "strictly before kickoff" filter would
+    otherwise depend on an unstated timezone.
+    """
+    text = value.strip()
+    if not text:
+        return None
+    if text.endswith(("Z", "z")):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        raise BadRequest(
+            f"kickoff must be ISO-8601 (e.g. 2026-09-02T13:00:00Z), got {value!r}",
+            source="flashscore",
+        ) from None
+    if parsed.tzinfo is None:
+        raise BadRequest(
+            f"kickoff must carry a UTC offset (got a naive timestamp {value!r})",
+            source="flashscore",
+        )
+    return int(parsed.timestamp())
+
+
+@dataclass(frozen=True)
+class _H2HMeeting:
+    """One row of the recorded ``df_hh_<sport>_<eventId>`` feed.
+
+    Field mapping (recorded 2026-09-02): ``KP`` event id, ``KC`` kickoff unix
+    seconds, ``KJ``/``KK`` home/away display names, ``KU``/``KT`` final score,
+    ``KL`` "home:away" score text, ``KF`` competition, ``KH`` country, ``KS``
+    venue of the anchored team, and ``KB`` opens a "Last matches: <team>"
+    section whose team is the anchor for ``KS``.
+    """
+
+    row_index: int
+    event_id: str
+    kickoff: int | None
+    home: str
+    away: str
+    home_key: str
+    away_key: str
+    home_score: int | None
+    away_score: int | None
+    score_text: str | None
+    competition: str | None
+    country: str | None
+    anchor: str | None
+    venue: str | None
+
+
 class FlashscoreAdapter(SourceAdapter):
-    """Flashscore adapter: httpx + the verified ``x-fsign`` day-feed path."""
+    """Flashscore adapter: httpx + verified day-feed and per-event h2h paths."""
 
     source: ClassVar[str] = "flashscore"
 
@@ -252,7 +334,35 @@ class FlashscoreAdapter(SourceAdapter):
         if category not in _CATEGORIES:
             raise BadRequest(f"unknown category {category!r}", source=self.source)
         if category == "h2h":
-            raise self._h2h_unavailable()
+            event_id, entity_a, entity_b, kickoff = self._h2h_params(params)
+            if not event_id:
+                # Name-only lookups keep the pre-network typed error: no
+                # team-name -> event resolution chain was ever probed.
+                raise self._h2h_unavailable()
+            if not entity_a or not entity_b:
+                raise BadRequest(
+                    "h2h requires both entity_a and entity_b to corroborate "
+                    "the verified event id",
+                    source=self.source,
+                )
+            if sport not in _H2H_VERIFIED_SPORTS:
+                raise NotFound(
+                    "flashscore h2h is probe-verified only for football "
+                    "(df_hh_1_<eventId>); no recorded response exists for "
+                    f"sport id {_SPORT_IDS[sport]} — re-probe before shipping",
+                    source=self.source,
+                )
+            if kickoff is None:
+                # The id alone cannot bound the meeting list: the "strictly
+                # before kickoff" filter would be a guess, so answer with an
+                # honest empty h2h cell instead of fetching.
+                raise NoData(
+                    "h2h with a verified event id also needs the scheduled "
+                    "kickoff (ISO-8601, e.g. 2026-09-02T13:00:00Z) to bound "
+                    "the meeting list; no request sent",
+                    source=self.source,
+                )
+            return self._request(f"{FEED_BASE}/df_hh_{_SPORT_IDS[sport]}_{event_id}")
         if category == "match_summary":
             event_id, _, _ = self._summary_params(params)
             return self._request(f"{FEED_BASE}/df_su_1_{event_id}")
@@ -358,6 +468,23 @@ class FlashscoreAdapter(SourceAdapter):
             )
         return event_id, home, away
 
+    @staticmethod
+    def _h2h_params(params: Any) -> tuple[str, str, str, int | None]:
+        """(event_id, entity_a, entity_b, kickoff unix seconds) from the request.
+
+        ``event`` absent is the legacy name-only call (no verified name -> id
+        resolution exists, so ``fetch`` keeps raising ``NotFound``).  A
+        malformed or timezone-naive ``kickoff`` is a caller error.
+        """
+        get = params.get if hasattr(params, "get") else None
+        if get is None:
+            raise BadRequest("h2h params must be a mapping", source="flashscore")
+        event_id = str(get("event") or "").strip()
+        entity_a = str(get("entity_a") or "").strip()
+        entity_b = str(get("entity_b") or "").strip()
+        kickoff = _kickoff_epoch(str(get("kickoff") or ""))
+        return event_id, entity_a, entity_b, kickoff
+
     def parse_match_summary(
         self, resp: SourceResponse, *, home_score: int | None, away_score: int | None
     ) -> ParseOutcome:
@@ -421,6 +548,300 @@ class FlashscoreAdapter(SourceAdapter):
                 )
             ],
         )
+
+    def parse_h2h(self, resp: SourceResponse, *, params: Mapping[str, str]) -> ParseOutcome:
+        """Parse ``df_hh_<sportId>_<eventId>`` into corroborated pair meetings.
+
+        Honesty rules (recorded feed shape, tests/fixtures/flashscore/h2h/):
+
+        * The verified event id must appear in the feed; that row's ordered
+          participants (``KJ``/``KK``) must equal ``entity_a``/``entity_b`` and
+          its kickoff (``KC``) must equal the caller's scheduled kickoff.  A
+          reversed or missing participants row, an ambiguous/duplicated target
+          row or a kickoff mismatch raises ``NoData`` — never a guessed pair.
+        * Only completed meetings of the same pair (either home/away order,
+          scored by ``KU``/``KT``/``KL``) strictly before the kickoff are
+          returned.  Rows at/after the kickoff are dropped (the target event
+          itself is one of them).
+        * Missing identity (``KP``), unusable timestamps and conflicting
+          duplicate rows make the meeting list unavailable (``NoData``); the
+          other sections of the feed (each team's own recent matches) are
+          never shipped as h2h.
+        """
+        event_id, entity_a, entity_b, kickoff_epoch = self._h2h_params(params)
+        if not event_id:
+            raise self._h2h_unavailable()
+        if kickoff_epoch is None:
+            raise NoData(
+                "h2h parsing requires the verified scheduled kickoff "
+                "(kickoff=<ISO-8601>) to bound the meeting list",
+                source=resp.source,
+            )
+        home_key, away_key = _team_key(entity_a), _team_key(entity_b)
+        if not home_key or not away_key or home_key == away_key:
+            raise NoData(
+                "h2h participants cannot be told apart "
+                f"(entity_a={entity_a!r}, entity_b={entity_b!r})",
+                source=resp.source,
+            )
+
+        text = self._decode_payload(resp)
+        parts = text.split("~")
+        if not parts or not parts[0].startswith("SA÷"):
+            raise NoData(
+                "payload is not a flashscore h2h feed (feed header 'SA÷…' "
+                f"missing; got {text[:60]!r})",
+                source=resp.source,
+            )
+        sport = _SPORT_BY_ID.get(_split_fields(parts[0]).get("SA", ""))
+        if sport is None:
+            raise NoData(
+                "unrecognized feed sport id in the h2h header (no rows parsed "
+                "— never guess a sport)",
+                source=resp.source,
+            )
+
+        rows = self._h2h_rows(parts)
+        target = self._h2h_target(rows, event_id, home_key, away_key, kickoff_epoch, resp)
+        self._verify_orientation(target, resp)
+
+        events: list[Event] = []
+        seen: dict[str, tuple[int, str, str, int, int]] = {}
+        for row in rows:
+            # The target event itself is not a previous meeting.
+            if row.event_id == event_id:
+                continue
+            if not self._is_pair(row, home_key, away_key):
+                continue
+            self._verify_orientation(row, resp)
+            if row.kickoff is None or row.kickoff <= 0:
+                raise NoData(
+                    f"h2h meeting {row.event_id or f'row {row.row_index}'} has "
+                    "no usable timestamp (KC missing, not an integer or not a "
+                    "real unix time) — it cannot be placed before the kickoff",
+                    source=resp.source,
+                )
+            if row.kickoff >= kickoff_epoch:
+                continue
+            if not row.event_id:
+                raise NoData(
+                    f"h2h meeting on row {row.row_index} has no source event id "
+                    "(KP missing) — its identity is unverified",
+                    source=resp.source,
+                )
+            home_score, away_score = self._h2h_scores(row, resp)
+            signature = (row.kickoff, row.home_key, row.away_key, home_score, away_score)
+            previous = seen.get(row.event_id)
+            if previous is not None:
+                if previous != signature:
+                    raise NoData(
+                        f"h2h feed repeats event {row.event_id} with conflicting "
+                        "details — the meeting is ambiguous",
+                        source=resp.source,
+                    )
+                continue
+            seen[row.event_id] = signature
+            competition = None
+            if row.competition:
+                country = row.country
+                if country is not None and country.casefold() in _NON_COUNTRY:
+                    country = None
+                competition = Competition(name=row.competition, country=country)
+            events.append(
+                Event(
+                    sport=sport,
+                    external=ExternalRef(source=self.source, source_event_id=row.event_id),
+                    start_time_utc=_start_time_utc(str(row.kickoff)),
+                    status="finished",
+                    home=Team(name=row.home, score=home_score),
+                    away=Team(name=row.away, score=away_score),
+                    competition=competition,
+                )
+            )
+
+        warnings = [
+            parse_warning(
+                "h2h meetings are limited to the corroborated pair's completed "
+                f"matches strictly before the verified kickoff (event {event_id})",
+                resp,
+            )
+        ]
+        if not events:
+            warnings.append(
+                parse_warning(
+                    "h2h feed carried no completed meeting of this pair before "
+                    "the kickoff (valid empty — the feed also lists each team's "
+                    "own recent matches under separate sections)",
+                    resp,
+                )
+            )
+        return ParseOutcome(events=stamp_provenance(resp, events), warnings=warnings)
+
+    @staticmethod
+    def _h2h_rows(parts: list[str]) -> list[_H2HMeeting]:
+        """Split the recorded feed into meeting rows, tracking section anchors."""
+        rows: list[_H2HMeeting] = []
+        anchor: str | None = None
+        for index, chunk in enumerate(parts[1:], start=1):
+            fields = _split_fields(chunk)
+            if not fields:
+                continue
+            section = (fields.get("KB") or "").strip()
+            if section:
+                anchor = (
+                    _team_key(section.split(":", 1)[1])
+                    if section.casefold().startswith("last matches:")
+                    else None
+                )
+            home = _clean_team_name(fields.get("KJ") or "")
+            away = _clean_team_name(fields.get("KK") or "")
+            if not home or not away:
+                continue
+            rows.append(
+                _H2HMeeting(
+                    row_index=index,
+                    event_id=(fields.get("KP") or "").strip(),
+                    kickoff=_as_int(fields.get("KC")),
+                    home=home,
+                    away=away,
+                    home_key=_team_key(home),
+                    away_key=_team_key(away),
+                    home_score=_as_int(fields.get("KU")),
+                    away_score=_as_int(fields.get("KT")),
+                    score_text=(fields.get("KL") or "").strip() or None,
+                    competition=(fields.get("KF") or "").strip() or None,
+                    country=(fields.get("KH") or "").strip() or None,
+                    anchor=anchor,
+                    venue=(fields.get("KS") or "").strip() or None,
+                )
+            )
+        return rows
+
+    @staticmethod
+    def _h2h_target(
+        rows: list[_H2HMeeting],
+        event_id: str,
+        home_key: str,
+        away_key: str,
+        kickoff_epoch: int,
+        resp: SourceResponse,
+    ) -> _H2HMeeting:
+        """Find and corroborate the feed row for the verified event id."""
+        targets = [row for row in rows if row.event_id == event_id]
+        if not targets:
+            raise NoData(
+                f"h2h feed does not contain the verified event {event_id}: the "
+                "event id cannot be corroborated (participants/kickoff are "
+                "unverified) — refusing to return another pair's meetings",
+                source=resp.source,
+            )
+        signatures = {(row.kickoff, row.home_key, row.away_key) for row in targets}
+        if len(signatures) > 1:
+            raise NoData(
+                f"h2h feed carries conflicting rows for event {event_id} — the "
+                "event identity is ambiguous",
+                source=resp.source,
+            )
+        target = targets[0]
+        if target.home_key == away_key and target.away_key == home_key:
+            raise NoData(
+                f"h2h event {event_id} is recorded as {target.home} vs "
+                f"{target.away}; the request passes them reversed as "
+                "entity_a/entity_b, so the home/away orientation is ambiguous "
+                "— pass the fixture's home team as entity_a",
+                source=resp.source,
+            )
+        if target.home_key != home_key or target.away_key != away_key:
+            raise NoData(
+                f"h2h event {event_id} is recorded as {target.home} vs "
+                f"{target.away}, which does not match the requested "
+                "participants — refusing to mix pairs",
+                source=resp.source,
+            )
+        if target.kickoff is None:
+            raise NoData(
+                f"h2h event {event_id} row has no usable kickoff (KC missing or "
+                "not an integer) — the scheduled kickoff is unverified",
+                source=resp.source,
+            )
+        if target.kickoff != kickoff_epoch:
+            actual = _start_time_utc(str(target.kickoff))
+            expected = datetime.fromtimestamp(kickoff_epoch, tz=UTC).isoformat()
+            raise NoData(
+                f"h2h event {event_id} kickoff {actual} does not match the "
+                f"verified scheduled kickoff {expected} — the event id may be "
+                "stale or belong to another fixture",
+                source=resp.source,
+            )
+        return target
+
+    @staticmethod
+    def _is_pair(row: _H2HMeeting, home_key: str, away_key: str) -> bool:
+        """True when the row is a meeting between exactly this pair."""
+        return (row.home_key == home_key and row.away_key == away_key) or (
+            row.home_key == away_key and row.away_key == home_key
+        )
+
+    @staticmethod
+    def _verify_orientation(row: _H2HMeeting, resp: SourceResponse) -> None:
+        """Cross-check ``KJ``/``KK`` against the section anchor and ``KS``.
+
+        The recorded feed groups meetings under "Last matches: <team>" and
+        stamps ``KS`` with that team's venue (home/away).  When both are
+        present they must agree with the row's home/away columns, otherwise
+        the row's orientation is uncertain and the cell is unavailable.
+        """
+        if row.anchor is None or row.venue is None:
+            return
+        venue = row.venue.casefold()
+        if venue not in ("home", "away"):
+            return
+        if row.home_key == row.anchor:
+            expected = "home"
+        elif row.away_key == row.anchor:
+            expected = "away"
+        else:
+            raise NoData(
+                f"h2h row {row.row_index} lists {row.home} vs {row.away} but its "
+                f"section anchors on {row.anchor!r} — the row identity is "
+                "uncertain",
+                source=resp.source,
+            )
+        if venue != expected:
+            raise NoData(
+                f"h2h row {row.row_index} ({row.home} vs {row.away}) reports "
+                f"KS={row.venue!r} while the anchored team {row.anchor!r} is "
+                f"{expected} — the orientation is ambiguous",
+                source=resp.source,
+            )
+
+    @staticmethod
+    def _h2h_scores(row: _H2HMeeting, resp: SourceResponse) -> tuple[int, int]:
+        """Home/away final score aligned with ``KJ``/``KK``; NoData if unusable."""
+        match = _H2H_SCORE_RE.match(row.score_text or "")
+        text_scores = (int(match.group(1)), int(match.group(2))) if match else None
+        if row.home_score is None or row.away_score is None:
+            if text_scores is None:
+                raise NoData(
+                    f"h2h meeting {row.event_id} has no completed score "
+                    "(KU/KT and KL are missing or unusable) — it is not a "
+                    "completed match",
+                    source=resp.source,
+                )
+            return text_scores
+        if row.score_text is not None and text_scores is None:
+            raise NoData(
+                f"h2h meeting {row.event_id} has a malformed KL score "
+                f"{row.score_text!r}",
+                source=resp.source,
+            )
+        if text_scores is not None and text_scores != (row.home_score, row.away_score):
+            raise NoData(
+                f"h2h meeting {row.event_id} score fields disagree: "
+                f"KL={row.score_text!r} vs KU/KT={row.home_score}:{row.away_score}",
+                source=resp.source,
+            )
+        return row.home_score, row.away_score
 
     def _offset_for(self, category: str, params: Any) -> int:
         """Day offset for fixtures/results, from the date param or a default.
@@ -488,13 +909,14 @@ class FlashscoreAdapter(SourceAdapter):
 
     def _h2h_unavailable(self) -> PrimeSportDataError:
         return NotFound(
-            "flashscore has no verified path from team names to head-to-head "
-            "meetings: the per-event feed df_hh_<sport>_<eventId> was verified "
-            "live (2026-09-02: df_hh_1_KxrZoe94 -> HTTP 200, recorded under "
-            "tests/fixtures/flashscore/h2h/) but it requires a flashscore "
-            "event id, and no team-name -> event resolution chain (search/"
-            "team pages) was probed this session; source ids are not shared "
-            "across sources, so the SPEC h2h envelope cannot be built "
+            "flashscore h2h needs a verified event id: the per-event feed "
+            "df_hh_<sport>_<eventId> was verified live (2026-09-02: "
+            "df_hh_1_KxrZoe94 -> HTTP 200, recorded under "
+            "tests/fixtures/flashscore/h2h/) and this adapter ships it when "
+            "the caller passes event=<flashscore id> and "
+            "kickoff=<ISO-8601 start>; no team-name -> event resolution chain "
+            "(search/team pages) was probed, and source ids are not shared "
+            "across sources, so a name-only h2h call cannot be built "
             "honestly. Evidence: docs/source-health.md.",
             source=self.source,
         )

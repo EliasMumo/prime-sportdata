@@ -212,6 +212,7 @@ class RequestParams(BaseModel):
     team_a: str | None = None  # lineups: first side
     team_b: str | None = None  # lineups: second side
     event_id: str | None = None  # lineups: direct source event id
+    kickoff: str | None = None  # h2h: verified scheduled kickoff (ISO-8601)
 
 
 class Meta(BaseModel):

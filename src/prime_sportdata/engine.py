@@ -484,6 +484,8 @@ class Engine:
                         outcome: ParseOutcome = adapter.parse_odds(resp)
                     elif category == "lineups":
                         outcome = adapter.parse_lineups(resp)
+                    elif category == "h2h":
+                        outcome = adapter.parse_h2h(resp, params=norm)
                     elif category == "match_summary":
                         outcome = adapter.parse_match_summary(
                             resp,
@@ -609,6 +611,7 @@ class Engine:
                 team_a=norm.get("team_a"),
                 team_b=norm.get("team_b"),
                 event_id=norm.get("event") or norm.get("event_id"),
+                kickoff=norm.get("kickoff"),
             ),
             warnings=list(warnings),
         )

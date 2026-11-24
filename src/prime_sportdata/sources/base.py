@@ -76,6 +76,19 @@ class SourceAdapter(ABC):
         warnings. Raises typed errors (e.g. ``NoData``) when the content is
         unusable instead of returning fabricated rows."""
 
+    def parse_h2h(
+        self, resp: SourceResponse, *, params: Mapping[str, str]
+    ) -> ParseOutcome:
+        """Turn one fetched h2h response into normalized meeting events.
+
+        The default delegates to ``parse_events``: adapters that already
+        return meeting rows through the generic parser (linebet) keep working
+        unchanged.  Adapters with a dedicated per-event h2h feed override
+        this; ``params`` carries the caller's verified request fields (e.g.
+        the source event id and scheduled kickoff).
+        """
+        return self.parse_events(resp)
+
     def parse_odds(self, resp: SourceResponse) -> ParseOutcome:
         """Turn one fetched ``SourceResponse`` into normalized betting quotes.
 

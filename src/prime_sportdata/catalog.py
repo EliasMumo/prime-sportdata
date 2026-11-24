@@ -58,7 +58,18 @@ LINEBET_ODDS: tuple[str, ...] = ("linebet",)
 # Per-row supported query params (SPEC "Query params" + API surface).
 FIXTURES_RESULTS_PARAMS: tuple[str, ...] = ("date", "team", "league", "limit")
 LIVE_PARAMS: tuple[str, ...] = ("team", "league", "limit")  # live ignores date
-H2H_PARAMS: tuple[str, ...] = ("entity_a", "entity_b", "league", "limit")
+# ``event`` + ``kickoff`` are the verified-fixture inputs: the flashscore h2h
+# feed is keyed by its own event id and needs the scheduled kickoff to bound
+# "strictly before" (`df_hh_1_<eventId>`).  Name-only calls keep working and
+# still end in the typed "no verified name -> event resolution" cell.
+H2H_PARAMS: tuple[str, ...] = (
+    "entity_a",
+    "entity_b",
+    "event",
+    "kickoff",
+    "league",
+    "limit",
+)
 ODDS_PARAMS: tuple[str, ...] = ("date", "league", "limit")  # day-wide odds lists
 LINEUPS_PARAMS: tuple[str, ...] = ("team_a", "team_b", "limit")
 # Betika serves its own upcoming list; no verified date filter, so the

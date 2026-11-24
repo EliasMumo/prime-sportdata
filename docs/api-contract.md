@@ -23,7 +23,7 @@ curl output from that session. Error-path curls are local-only; exactly one
 | `GET /v1/{sport}/fixtures` | upcoming/day matches (`date` default today) |
 | `GET /v1/{sport}/results` | finished matches (`date` default today UTC at the route; adapter-side fallback yesterday — results need the requested day's rows) |
 | `GET /v1/{sport}/live` | matches in play right now (`date` ignored by construction) |
-| `GET /v1/{sport}/h2h` | head-to-head: `entity_a`+`entity_b` required |
+| `GET /v1/{sport}/h2h` | head-to-head: `entity_a`+`entity_b` required; football also accepts the verified flashscore `event` + `kickoff` |
 
 `sport ∈ {football, basketball, tennis}`; `category ∈ {fixtures, live,
 results, h2h}`. Anything else → 404 `not_found` error body. Params come from
@@ -82,20 +82,21 @@ curl -s http://127.0.0.1:8097/catalog
 | 1 | football | fixtures | date, team, league, limit | flashscore, sofascore, livescore | `curl -s 'http://127.0.0.1:8097/v1/football/fixtures?date=2026-09-02&team=Arsenal&league=Premier+League&limit=50'` |
 | 2 | football | live | team, league, limit | flashscore, sofascore, livescore | `curl -s 'http://127.0.0.1:8097/v1/football/live?team=Arsenal&league=Premier+League&limit=50'` |
 | 3 | football | results | date, team, league, limit | flashscore, sofascore, livescore | `curl -s 'http://127.0.0.1:8097/v1/football/results?date=2026-09-02&team=Arsenal&league=Premier+League&limit=50'` |
-| 4 | football | h2h | entity_a, entity_b, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/football/h2h?entity_a=Team+A&entity_b=Team+B&league=Premier+League&limit=50'` |
+| 4 | football | h2h | entity_a, entity_b, event, kickoff, league, limit | linebet, sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/football/h2h?entity_a=Team+A&entity_b=Team+B&event=E50wDhIl&kickoff=2026-09-02T13:00:00Z&league=Premier+League&limit=50'` |
 | 5 | basketball | fixtures | date, team, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/basketball/fixtures?date=2026-09-02&team=Arsenal&league=Premier+League&limit=50'` |
 | 6 | basketball | live | team, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/basketball/live?team=Arsenal&league=Premier+League&limit=50'` |
 | 7 | basketball | results | date, team, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/basketball/results?date=2026-09-02&team=Arsenal&league=Premier+League&limit=50'` |
-| 8 | basketball | h2h | entity_a, entity_b, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/basketball/h2h?entity_a=Team+A&entity_b=Team+B&league=Premier+League&limit=50'` |
+| 8 | basketball | h2h | entity_a, entity_b, event, kickoff, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/basketball/h2h?entity_a=Team+A&entity_b=Team+B&event=E50wDhIl&kickoff=2026-09-02T13:00:00Z&league=Premier+League&limit=50'` |
 | 9 | tennis | fixtures | date, team, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/tennis/fixtures?date=2026-09-02&team=Arsenal&league=Premier+League&limit=50'` |
 | 10 | tennis | live | team, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/tennis/live?team=Arsenal&league=Premier+League&limit=50'` |
 | 11 | tennis | results | date, team, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/tennis/results?date=2026-09-02&team=Arsenal&league=Premier+League&limit=50'` |
-| 12 | tennis | h2h | entity_a, entity_b, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/tennis/h2h?entity_a=Team+A&entity_b=Team+B&league=Premier+League&limit=50'` |
+| 12 | tennis | h2h | entity_a, entity_b, event, kickoff, league, limit | sofascore, flashscore, livescore | `curl -s 'http://127.0.0.1:8097/v1/tennis/h2h?entity_a=Team+A&entity_b=Team+B&event=E50wDhIl&kickoff=2026-09-02T13:00:00Z&league=Premier+League&limit=50'` |
 
 Every row also carries `"limit_default": 50, "limit_max": 200`. Note the
-failover order difference: football h2h and all basketball/tennis rows start
-with `sofascore`; football fixtures/live/results start with `flashscore`
-(SPEC failover table + catalog rationale). The example curls above are the
+failover order difference: football h2h starts with `linebet` (its own
+pair-scoped h2h feed), basketball/tennis rows start with `sofascore`, and
+football fixtures/live/results start with `flashscore` (SPEC failover table +
+catalog rationale). The example curls above are the
 exact strings the API emits (verbatim from the captured /catalog response,
 rows 1–12).
 
@@ -108,6 +109,8 @@ rows 1–12).
 | `date` | fixtures, results | today (UTC date, set by the route) | strictly `YYYY-MM-DD` and a real calendar date (`2026-02-30`, `2026-9-2`, `2026-13-01` → 400). NOTE: flashscore serves only Prague-day offsets −1/0/+1 — a date farther out fails that source (`not_found` in the 502 chain); the flashscore adapter's own no-date fallback is today for fixtures and Prague-yesterday for results |
 | `team` | fixtures, results, live | none (optional) | free text; advisory — resolved per source (sofascore search; flashscore day doc ignores it with a standing warning) |
 | `entity_a`, `entity_b` | h2h | none | **both required**; blank/absent → 400 |
+| `event` | h2h | none | verified source event id (flashscore `df_hh_1_<event>`); without it the cell keeps the typed "no name→event resolution" refusal |
+| `kickoff` | h2h | none | ISO-8601 instant **with a UTC offset** (e.g. `2026-09-02T13:00:00Z`); naive/garbage → 400. Required for the verified flashscore path — it bounds the "strictly before kickoff" meeting filter |
 | `league` | all | none (optional) | free text, advisory, no server validation |
 | `limit` | all | 50 | integer 1..200; non-int or out of range → 400 |
 
@@ -183,12 +186,18 @@ exactly this body and code: `tests/test_server.py::test_v1_all_sources_down_is_5
 {"error":{"code":"<code of the last source error>","detail":"…","source":"<last source>","tried_sources":["sofascore","flashscore","livescore"]}}
 ```
 
-Today, real `h2h` requests for all three sports end in this 502 path: every
-shipped adapter type-errors h2h (evidence in `docs/source-health.md`), so the
-engine's `FetchFailed` terminal outcome is the honest answer until a source
-gains a verified h2h data path. Note the 200 h2h envelope shape exists and is
-route-tested with a fake answering adapter, but no real adapter produces it
-this build.
+h2h availability today: **football with a verified flashscore `event` +
+`kickoff`** can answer 200 from the recorded `df_hh_1_<event>` feed (see
+`docs/source-health.md`). The feed is corroborated before any meeting is
+shipped: the row whose `KP` equals `event` must list `entity_a` as home and
+`entity_b` as away and its `KC` must equal `kickoff`; otherwise the cell is
+unavailable (reversed orientation, other participants, stale id, malformed
+rows). Only completed meetings of the same pair strictly before the kickoff
+are returned, deduplicated; each team's own recent matches are never mixed in.
+A name-only h2h call (no `event`) still has no verified name→event resolution
+and keeps the typed-error path, as do basketball/tennis h2h (no recorded
+`df_hh_2/3` probe). Linebet precedes flashscore in the football order, so pin
+`source=flashscore` when the caller owns a flashscore fixture id.
 
 ### Status code summary
 

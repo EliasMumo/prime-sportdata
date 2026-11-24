@@ -48,9 +48,11 @@ class FakeAdapter(SourceAdapter):
         self.error = error
         self.empty = empty
         self.fetch_calls = 0
+        self.last_params: Mapping[str, str] | None = None
 
     def fetch(self, sport: str, category: str, params: Mapping[str, str]) -> SourceResponse:
         self.fetch_calls += 1
+        self.last_params = dict(params)
         if self.error is not None:
             raise self.error
         return SourceResponse(
@@ -205,7 +207,12 @@ def test_catalog_lists_all_24_rows_with_params_and_curl(client: TestClient) -> N
     live = next(r for r in rows if r["category"] == "live")
     assert "date" not in live["params"]
     h2h = next(r for r in rows if r["category"] == "h2h")
-    assert set(h2h["params"]) == {"entity_a", "entity_b", "league", "limit"}
+    # event/kickoff are the verified-fixture inputs (flashscore df_hh_1_<id>);
+    # name-only calls stay valid and keep the typed "no resolution" cell.
+    assert set(h2h["params"]) == {
+        "entity_a", "entity_b", "event", "kickoff", "league", "limit",
+    }
+    assert "kickoff=2026-09-02T13:00:00Z" in h2h["example_curl"]
     lineups = next(r for r in rows if r["category"] == "lineups")
     assert set(lineups["params"]) == {"team_a", "team_b", "limit"}
 
@@ -230,6 +237,7 @@ def test_v1_fixtures_returns_200_envelope(client: TestClient) -> None:
         "team_a": None,
         "team_b": None,
         "event_id": None,
+        "kickoff": None,
     }
     assert meta["warnings"] == ["server-test warning"]
     assert meta["latency_ms"] >= 0
@@ -246,6 +254,67 @@ def test_v1_valid_empty_is_200_events_empty(tmp_path: Path) -> None:
         resp = client.get("/v1/football/fixtures?date=2026-09-02")
     assert resp.status_code == 200
     assert resp.json()["data"]["events"] == []
+
+
+def test_v1_h2h_passes_the_verified_event_and_kickoff_to_the_adapter(tmp_path: Path) -> None:
+    adapters = healthy_adapters()
+    with TestClient(create_app(make_engine(tmp_path, adapters))) as client:
+        resp = client.get(
+            "/v1/football/h2h",
+            params={
+                "entity_a": "Sassuolo",
+                "entity_b": "Frosinone",
+                "event": "KxrZoe94",
+                "kickoff": "2026-09-02T13:00:00Z",
+                "source": "flashscore",
+            },
+        )
+    assert resp.status_code == 200, resp.text
+    # The route copies only catalog-listed params into the engine: the verified
+    # fixture fields must survive that filter and reach the adapter.
+    assert adapters["flashscore"].last_params is not None
+    assert adapters["flashscore"].last_params["event"] == "KxrZoe94"
+    assert adapters["flashscore"].last_params["kickoff"] == "2026-09-02T13:00:00Z"
+    body = resp.json()
+    assert body["meta"]["request"]["event_id"] == "KxrZoe94"
+    assert body["meta"]["request"]["kickoff"] == "2026-09-02T13:00:00Z"
+    assert body["data"]["home"]["name"] == "Sassuolo"
+    assert body["data"]["away"]["name"] == "Frosinone"
+
+
+def test_v1_h2h_rejects_a_kickoff_without_a_timezone(client: TestClient) -> None:
+    resp = client.get(
+        "/v1/football/h2h",
+        params={"entity_a": "Sassuolo", "entity_b": "Frosinone", "kickoff": "2026-09-02T13:00:00"},
+    )
+    assert resp.status_code == 400
+    err = resp.json()["error"]
+    assert err["code"] == "bad_request"
+    assert "kickoff" in err["detail"]
+
+
+def test_h2h_unavailable_leaves_the_fixtures_publication_path_working(tmp_path: Path) -> None:
+    """h2h enrichment is optional: an empty h2h cell must not affect fixtures."""
+    adapters = healthy_adapters()
+    adapters["flashscore"] = FakeAdapter("flashscore", empty=True)
+    with TestClient(create_app(make_engine(tmp_path, adapters))) as client:
+        h2h = client.get(
+            "/v1/football/h2h",
+            params={
+                "entity_a": "Sassuolo",
+                "entity_b": "Frosinone",
+                "event": "KxrZoe94",
+                "kickoff": "2026-09-02T13:00:00Z",
+                "source": "flashscore",
+            },
+        )
+        assert h2h.status_code == 200
+        assert h2h.json()["data"]["events"] == []
+        # Same source, next request: the unavailable h2h cell did not poison it.
+        adapters["flashscore"].empty = False
+        fixtures = client.get("/v1/football/fixtures?date=2026-09-02&limit=50")
+        assert fixtures.status_code == 200
+        assert fixtures.json()["data"]["events"][0]["home"]["name"] == "Home FC"
 
 
 def test_v1_h2h_requires_both_entities(client: TestClient) -> None:

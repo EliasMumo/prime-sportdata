@@ -113,9 +113,18 @@ success-only; repeat asks within TTL fetch nothing upstream):
 - **live: poll no faster than every 30 s.** Service TTL is 30 s; anything
   faster just hits the service disk cache and — after expiry — upstream at the
   service's own 1 s/host floor.
-- **h2h today: do not poll at all** unless you accept 502s — every shipped
-  adapter type-errors h2h (see per-source reality below); schedule it once a
-  source gains a verified h2h path.
+- **h2h: one verified path exists.** For a football fixture whose flashscore
+  `external.source_event_id` and `start_time_utc` you already hold (both come
+  back on every fixtures event), call
+  `/v1/football/h2h?entity_a=<home>&entity_b=<away>&event=<id>&kickoff=<start_time_utc>&source=flashscore`.
+  The adapter corroborates that event (ordered participants + kickoff) and
+  returns only that pair's completed meetings strictly before the kickoff;
+  anything it cannot corroborate is an honest empty/unavailable cell. Pin
+  `source=flashscore` (linebet answers name-only football h2h first), cache
+  the result with the fixture, and treat h2h as optional enrichment — a 502
+  or empty `events` must never block publishing a prediction. Name-only h2h
+  (no `event`) has no verified resolution chain and still ends in the typed
+  error path.
 
 **5. Error handling.**
 
@@ -184,9 +193,12 @@ statuses make these observable at runtime, not assumptions:
   ships typed `source_unavailable` only, no data path. It sits last in every
   failover order, so it only matters when the first two legs fail; expect it
   in `tried_sources`, rarely as the winner.
-- **h2h for all sports** is a typed-error cell today (both sofascore and
-  flashscore raise `NotFound` with probe evidence; no team-name→meetings chain
-  verified). Live answers with real data were observed for: football fixtures
+- **h2h**: flashscore serves football when the caller passes the verified
+  event id + kickoff (`df_hh_1_<event>`, recorded body in
+  `tests/fixtures/flashscore/h2h/`). Name-only h2h and basketball/tennis h2h
+  remain typed-error cells (no verified name→event chain; `df_hh_2/3` never
+  probed); linebet also serves its own pair-scoped football h2h. Live answers
+  with real data were observed for: football fixtures
   (flashscore, 363 events at probe), football live (sofascore, 144),
   basketball/tennis live (sofascore 200s), basketball fixtures/results
   (sofascore team-scoped + flashscore day feeds), tennis day feeds
