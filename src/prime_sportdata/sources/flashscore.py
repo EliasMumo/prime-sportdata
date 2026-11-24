@@ -153,6 +153,10 @@ _FEED_TAIL = "3_en_2"
 # probed, so those sports keep the existing typed-error cells.
 _H2H_VERIFIED_SPORTS: frozenset[str] = frozenset({"football"})
 _H2H_SCORE_RE = re.compile(r"^(\d+):(\d+)$")
+# Flashscore tags clubs in international competitions with a three-letter
+# country code ("Daejeon (Kor)") in the day feed while the per-event h2h feed
+# uses the bare name ("Daejeon").  Dropped for identity comparison only.
+_COUNTRY_SUFFIX_RE = re.compile(r"\s*\([A-Z][a-z]{2}\)$")
 VERIFIED_DAY_OFFSETS: tuple[int, ...] = tuple(range(-7, 2))
 _CONNECT_TIMEOUT_S = 12.0
 _MAX_RETRIES = 2
@@ -263,8 +267,14 @@ def _clean_team_name(value: str) -> str:
 
 
 def _team_key(value: str) -> str:
-    """Comparison key for a team name (case/whitespace/marker insensitive)."""
-    return " ".join(_clean_team_name(value).casefold().split())
+    """Comparison key for a team name.
+
+    Case/whitespace/winner-marker insensitive, and a trailing three-letter
+    country tag ("(Kor)") is ignored because the day feed and the h2h feed
+    spell the same club differently.  Display names are never rewritten.
+    """
+    name = _COUNTRY_SUFFIX_RE.sub("", _clean_team_name(value))
+    return " ".join(name.casefold().split())
 
 
 def _kickoff_epoch(value: str) -> int | None:

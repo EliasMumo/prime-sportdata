@@ -403,6 +403,36 @@ def test_parse_h2h_upcoming_event_is_corroborated_from_section_anchors(
     assert any("does not contain the target event row" in warning for warning in outcome.warnings)
 
 
+def test_parse_h2h_upcoming_event_matches_country_suffixed_names(
+    adapter: fs.FlashscoreAdapter,
+) -> None:
+    """The day feed tags clubs "(Kor)"; the h2h feed anchors bare names."""
+    prior = _row(
+        event="PriorMeeting", kickoff=1788021000, home="Township Rollers",
+        away="Prisons XI Gaborone", home_score=1, away_score=0, venue="home",
+    )
+    reverse = _row(
+        event="PriorMeeting2", kickoff=1787510700, home="Prisons XI Gaborone",
+        away="Township Rollers", home_score=0, away_score=1, venue="home",
+    )
+    body = (
+        "SA÷1¬~KB÷Last matches: Township Rollers¬~" + prior + "~"
+        "KB÷Last matches: Prisons XI Gaborone¬~" + reverse + "~"
+    )
+    outcome = adapter.parse_h2h(
+        _resp(body),
+        params=_params(
+            entity_a="Township Rollers (Bot)",
+            entity_b="Prisons XI Gaborone (Bot)",
+        ),
+    )
+    assert [event.external.source_event_id for event in outcome.events] == [
+        "PriorMeeting",
+        "PriorMeeting2",
+    ]
+    assert outcome.events[0].home.name == "Township Rollers"
+
+
 def test_parse_h2h_upcoming_event_with_foreign_anchors_is_rejected(
     adapter: fs.FlashscoreAdapter,
 ) -> None:
